@@ -27,6 +27,34 @@ const DEFAULT_HEADERS: HeadersInit = {
   DNT: "1",
 };
 
+/** Fallback via Jina AI Reader: roda Chrome real, bypassa Cloudflare/CSR, grátis */
+async function fetchViaJina(url: string): Promise<string | null> {
+  try {
+    const jinaUrl = `https://r.jina.ai/${url}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30_000); // Jina é mais lento
+    const res = await fetch(jinaUrl, {
+      headers: {
+        "Accept": "text/html",
+        "X-Return-Format": "html",    // devolve HTML, não Markdown
+        "X-Remove-Selector": "header, footer, nav, script, style", // HTML mais limpo
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) {
+      console.warn(`[crawler] Jina ${url} → HTTP ${res.status}`);
+      return null;
+    }
+    const html = await res.text();
+    console.log(`[crawler] Jina OK: ${url} (${html.length} chars)`);
+    return html;
+  } catch (err) {
+    console.error(`[crawler] Jina falhou para ${url}:`, err);
+    return null;
+  }
+}
+
 async function fetchPage(url: string, referer?: string): Promise<string | null> {
   const headers: Record<string, string> = {
     ...(DEFAULT_HEADERS as Record<string, string>),
@@ -39,19 +67,39 @@ async function fetchPage(url: string, referer?: string): Promise<string | null> 
     const res = await fetch(url, { headers, signal: controller.signal });
     clearTimeout(timer);
 
-    // Se 403, tenta uma vez mais com o próprio URL como Referer + pequeno delay
+    // Se 403 sem referer, tenta com Referer próprio primeiro
     if (res.status === 403 && !referer) {
-      await new Promise((r) => setTimeout(r, 1500));
-      return fetchPage(url, url);
+      await new Promise((r) => setTimeout(r, 1000));
+      const withReferer = await fetchPage(url, url);
+      // Se ainda falhou (null) ou veio HTML menor que 5kb (provavelmente CSR/bloqueado), escalona para Jina
+      if (!withReferer || withReferer.length < 5_000) {
+        console.log(`[crawler] Escalando para Jina: ${url}`);
+        return fetchViaJina(url);
+      }
+      return withReferer;
     }
 
     if (!res.ok) {
       console.warn(`[crawler] ${url} → HTTP ${res.status}`);
+      // Qualquer outro erro (ex: 503, 429) também tenta Jina
+      if (!referer) return fetchViaJina(url);
       return null;
     }
-    return await res.text();
+
+    const html = await res.text();
+
+    // HTML muito pequeno indica provavelmente CSR (React/Next/Vue sem SSR)
+    // Jina renderiza o JS e devolve o HTML completo
+    if (html.length < 5_000 && !referer) {
+      console.log(`[crawler] HTML muito pequeno (${html.length} chars), escalando para Jina: ${url}`);
+      return fetchViaJina(url);
+    }
+
+    return html;
   } catch (err) {
     console.error(`[crawler] Falha ao buscar ${url}:`, err);
+    // Em caso de erro de rede (ECONNRESET etc.), tenta Jina
+    if (!referer) return fetchViaJina(url);
     return null;
   }
 }
