@@ -21,11 +21,13 @@ export function FonteActions({ fonteId, status }: FonteActionsProps) {
       const res = await fetch(`/api/fontes/${fonteId}/crawl`, {
         method: "POST",
       });
+      const data = await res.json();
       if (res.ok) {
         setDone(true);
-        // Revalida a página para atualizar o status
         router.refresh();
       }
+      // data.status === "queued" (Inngest) ou "done" (síncrono)
+      console.log("[crawl]", data);
     } catch (err) {
       console.error(err);
     } finally {
@@ -46,9 +48,9 @@ export function FonteActions({ fonteId, status }: FonteActionsProps) {
           style={{ animation: loading ? "spin 1s linear infinite" : undefined }}
         />
         {loading
-          ? "Iniciando..."
+          ? "Sincronizando..."
           : done
-          ? "Na fila ✓"
+          ? "Concluído ✓"
           : status === "erro"
           ? "Tentar novamente"
           : "Sincronizar"}

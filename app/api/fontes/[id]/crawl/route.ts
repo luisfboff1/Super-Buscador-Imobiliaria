@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { getFonteById } from "@/lib/db/queries";
+import { getFonteById, updateFonteStatus, upsertImoveis, markImoveisIndisponiveis } from "@/lib/db/queries";
 import { inngest } from "@/lib/inngest/client";
+import { crawlFonte } from "@/lib/crawler";
 
 export async function POST(
   req: Request,
@@ -19,11 +20,34 @@ export async function POST(
     return NextResponse.json({ error: "Fonte não encontrada" }, { status: 404 });
   }
 
-  // Dispara o job no Inngest
-  await inngest.send({
-    name: "fontes/crawl.requested",
-    data: { fonteId: id },
-  });
+  // Em produção (Inngest configurado corretamente), usa o job assíncrono
+  // Em dev (sem Inngest dev server), executa o crawl sincronamente
+  const useInngest = process.env.NODE_ENV === "production" || process.env.INNGEST_DEV === "1";
 
-  return NextResponse.json({ status: "queued", fonteId: id });
+  if (useInngest) {
+    try {
+      await inngest.send({
+        name: "fontes/crawl.requested",
+        data: { fonteId: id },
+      });
+      return NextResponse.json({ status: "queued", fonteId: id });
+    } catch (err) {
+      console.warn("[crawl] Inngest falhou, executando sincronamente:", err);
+      // cai no crawl síncrono abaixo
+    }
+  }
+
+  // Crawl síncrono (dev ou fallback)
+  try {
+    await updateFonteStatus(id, "crawling");
+    const imoveis = await crawlFonte({ id: fonte.id, url: fonte.url, cidade: fonte.cidade, estado: fonte.estado });
+    await upsertImoveis(id, imoveis);
+    await markImoveisIndisponiveis(id, imoveis.map((i) => i.urlAnuncio));
+    await updateFonteStatus(id, "ok");
+    return NextResponse.json({ status: "done", fonteId: id, imoveisEncontrados: imoveis.length });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Erro desconhecido";
+    await updateFonteStatus(id, "erro", msg);
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
 }
