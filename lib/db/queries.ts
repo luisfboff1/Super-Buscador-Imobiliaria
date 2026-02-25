@@ -1,4 +1,4 @@
-import { count, eq, desc, and, gte, lte, ilike, sql } from "drizzle-orm";
+import { count, eq, desc, and, gte, lte, ilike, sql, or } from "drizzle-orm";
 import { db, tenantSchema, authSchema } from "@/lib/db";
 
 // ─── STATS ────────────────────────────────────────────────────────────────────
@@ -107,6 +107,7 @@ export async function updateFonteStatus(
 // ─── IMÓVEIS ──────────────────────────────────────────────────────────────────
 
 export type FiltrosImoveis = {
+  q?: string;
   tipo?: string;
   cidade?: string;
   bairro?: string;
@@ -119,6 +120,16 @@ export type FiltrosImoveis = {
 
 export async function searchImoveis(filtros: FiltrosImoveis = {}) {
   const conditions = [eq(tenantSchema.imoveis.disponivel, true)];
+
+  if (filtros.q) {
+    conditions.push(
+      or(
+        ilike(tenantSchema.imoveis.titulo, `%${filtros.q}%`),
+        ilike(tenantSchema.imoveis.bairro, `%${filtros.q}%`),
+        ilike(tenantSchema.imoveis.cidade, `%${filtros.q}%`),
+      )!
+    );
+  }
 
   if (filtros.tipo)
     conditions.push(ilike(tenantSchema.imoveis.tipo, filtros.tipo));
@@ -261,4 +272,17 @@ export async function getFavoritosIds(userId: string): Promise<string[]> {
     .from(tenantSchema.favoritos)
     .where(eq(tenantSchema.favoritos.userId, userId));
   return rows.map((r) => r.imovelId);
+}
+
+// ─── NAV STATS (para a Sidebar) ───────────────────────────────────────────────
+
+export async function getNavStats() {
+  const [[fontesCount], [fontesErro]] = await Promise.all([
+    db.select({ total: count() }).from(tenantSchema.fontes).where(eq(tenantSchema.fontes.ativa, true)),
+    db.select({ total: count() }).from(tenantSchema.fontes).where(eq(tenantSchema.fontes.status, "erro")),
+  ]);
+  return {
+    fontesUsed: fontesCount.total,
+    fontesErroCount: fontesErro.total,
+  };
 }

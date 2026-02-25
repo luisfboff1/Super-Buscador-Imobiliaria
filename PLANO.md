@@ -32,7 +32,7 @@ Hoje um comprador/investidor precisa vasculhar 200+ sites de imobiliárias de um
 | **Estilização** | Tailwind CSS | `v4` | Utility-first, integrado ao shadcn |
 | **Banco de dados** | Neon (PostgreSQL serverless) | — | Branching por tenant, escala automática, free tier |
 | **ORM** | Drizzle ORM | `0.45.1` | Type-safe, compatível Neon, migrations simples |
-| **Auth** | Clerk (`@clerk/nextjs`) | `6.38.2` | Multi-tenant nativo, organizations, RBAC |
+| **Auth** | Auth.js v5 (`next-auth@beta`) | `5.0.0-beta.30` | Email+senha + Google + GitHub OAuth; DrizzleAdapter; substituiu Clerk |
 | **Deploy** | Vercel | — | CI/CD automático, Edge Network, integração Neon |
 | **LLM / AI** | Vercel AI SDK | `6.0.99` | `ToolLoopAgent`, streaming, tool calling, AI Gateway |
 | **Provedor AI** | `@ai-sdk/openai` | latest | OpenAI GPT-4o via Vercel AI Gateway |
@@ -635,30 +635,38 @@ NEXT_PUBLIC_APP_URL=https://app.buscador.com
 - [x] `POST /api/auth/register` — cadastro com bcrypt
 - [x] `PATCH /api/user/profile` — atualizar nome do usuário
 
-**Mocks ainda presentes (a corrigir):**
-- ⚠️ Sidebar: `aiSearchesUsed={0}` hardcoded — barra de "Buscas IA hoje" é decorativa (AI não implementada)
-- ⚠️ Sidebar: `badgeDanger` em Fontes sempre visível (deveria ser dinâmico baseado em erros)
-- ⚠️ Buscador: campo de busca livre (`q`) enviado para API mas não processado na query SQL — apenas filtros clássicos funcionam
-- ⚠️ DB vazio: sem crawler real, `imoveis` está vazia — buscas sempre retornam zero resultados
+**Mocks corrigidos:**
+- [x] Sidebar: barra "Fontes cadastradas X/5" com dados reais via `getNavStats()` *(25/02)*
+- [x] Sidebar: badge "!" em Fontes agora dinâmico (só aparece se `status = "erro"`) *(25/02)*
+- [x] Buscador: busca livre (`q`) implementada com `ILIKE` em título, bairro e cidade *(25/02)*
+- [x] Seed de teste: 5 imobiliárias + 20 imóveis de Caxias do Sul via `npm run db:seed` *(25/02)*
+- [x] Card do buscador: exibe imagem quando `imagens[]` não está vazio *(25/02)*
+
+**Próximo passo crítico:** Implementar crawler para popular o banco com dados reais.
 
 ---
 
-### Fase 2 — Crawler + AI (Março/Abril) 🔜
+### Fase 2 — Crawler + AI (em andamento) 🚧
 
-**Crawler de imobiliárias (prioridade máxima — sem isso o buscador fica vazio):**
-- [ ] Inngest: configurar client e webhook `/api/webhooks/inngest`
-- [ ] Job `crawl-fonte`: Playwright/Crawlee abre URL → extrai imóveis → upsert no banco
-- [ ] Parsers dedicados: Tecimob, Jetimob (maior penetração no mercado BR)
-- [ ] Parser genérico (fallback LLM) para sites custom
-- [ ] Trigger crawl manual no painel de fontes (botão "Sincronizar" já existe na UI)
-- [ ] Re-crawl automático: agendamento a cada 24h via Inngest cron
-- [ ] Atualizar status da fonte: `pendente → crawling → ok | erro`
+**Crawler de imobiliárias (PRIORIDADE MÁXIMA — Próximo a implementar):**
+
+Estratégia: começar **sem Inngest** para simplificar — crawl síncrono direto na API route (`/api/fontes/[id]/crawl`). Inngest entra depois para crawls longos/agendados.
+
+- [ ] Instalar dependências: `crawlee`, `playwright-core`, `@crawlee/playwright`
+- [ ] `lib/crawler/index.ts`: função `crawlFonte(url)` — abre página, extrai imóveis, retorna array normalizado
+- [ ] Parser Tecimob: detecta site Tecimob → extrai listagem via seletores CSS conhecidos
+- [ ] Parser Jetimob: idem para Jetimob
+- [ ] Parser genérico: fallback para qualquer site — extrai via heurística (preços, endereços, áreas)
+- [ ] `POST /api/fontes/[id]/crawl`: roda o crawler, faz upsert dos imóveis, atualiza status da fonte
+- [ ] Botão "Sincronizar" na página de Fontes chama essa API
+- [ ] Atualizar status da fonte: `pendente → crawling → ok | erro` com feedback visual
+- [ ] (Depois) Inngest para re-crawl automático a cada 24h
 
 **Extração de fontes via CRECI:**
 - [ ] `lib/creci/extractor.ts`: scraper do site do CRECI por cidade
 - [ ] `GET /api/creci/extract?cidade=Caxias+do+Sul` → retorna lista de imobiliárias registradas
 - [ ] Página `fontes/importar/page.tsx`: input de cidade → preview da lista → aprovação → importação em batch
-- [ ] ⚠️ CRECI = CRECI-RS em `http://www.creciRS.gov.br` ou similar — verificar URL correta
+- [ ] ⚠️ CRECI-RS: verificar URL correta do site público
 
 **AI/LLM no Buscador:**
 - [ ] Instalar: `ai` (Vercel AI SDK v6), `@ai-sdk/openai`, `@ai-sdk/react`
@@ -667,10 +675,9 @@ NEXT_PUBLIC_APP_URL=https://app.buscador.com
 - [ ] `components/buscador/SearchChat.tsx`: `useChat` do `@ai-sdk/react` com UI de chat
 - [ ] Integrar chat na página `/buscador` (tab ou modo alternativo ao filtro clássico)
 - [ ] Salvar busca no histórico quando AI executa `buscar_imoveis`
-- [ ] Busca livre (`q`) no `/api/imoveis`: implementar full-text search no Postgres
 
 **Import/Export:**
-- [ ] Import via Excel: drag-and-drop `.xlsx` → parse → preview → Inngest job para crawl em batch
+- [ ] Import via Excel: drag-and-drop `.xlsx` → parse → preview → crawl em batch
 - [ ] Export Excel de resultados de busca (`/api/imoveis/export`)
 - [ ] Export Excel de favoritos
 
@@ -753,14 +760,24 @@ npm install -D typescript@5.9.3 @types/node tsx
 
 ## 14. Próximos Passos Imediatos
 
-1. **Luis**: Configurar credenciais Google OAuth em [console.cloud.google.com](https://console.cloud.google.com) e atualizar Doppler
-2. **Luis**: Implementar crawler básico (Inngest + Playwright) para 1-2 imobiliárias de Caxias do Sul
-3. **Luis**: Integrar AI/LLM no Buscador (Vercel AI SDK v6 + GPT-4o)
-4. **Mateus**: Levantar lista de imobiliárias de Caxias do Sul para testes de crawl
-5. **Mateus**: Definir nome comercial e domínio do produto
-6. **Ambos**: Reunião de revisão do protótipo em 11/03
+### 🔴 Agora (Crawler — dados reais)
+1. Instalar `crawlee` + `@crawlee/playwright` + `playwright-core`
+2. Implementar `lib/crawler/index.ts` com parser genérico
+3. Conectar ao botão "Sincronizar" da página de Fontes
+4. Testar com 1-2 imobiliárias reais de Caxias do Sul
+
+### 🟡 Depois (AI)
+5. Instalar `ai` (Vercel AI SDK v6) + `@ai-sdk/openai` + `@ai-sdk/react`
+6. Implementar `ToolLoopAgent` no buscador com tool calling
+7. Obter chave da OpenAI em platform.openai.com e atualizar Doppler
+
+### 🟢 Backlog
+8. Configurar Google OAuth (credenciais em console.cloud.google.com)
+9. Extração de fontes via CRECI
+10. Import/Export Excel
 
 ---
 
-*Documento gerado em 25/02/2026 — baseado na reunião entre Luis Fernando Boff e Mateus Rimoldi Facchin*  
+*Documento gerado em 25/02/2026 — baseado na reunião entre Luis Fernando Boff e Mateus Rimoldi Facchin*
 *Stack revisada com versões stable verificadas no npmjs.com em 25/02/2026.*
+*Última atualização: 25/02/2026 — Fase 1 concluída, crawler sendo implementado.*

@@ -25,6 +25,7 @@ type Imovel = {
   banheiros: number | null;
   vagas: number | null;
   urlAnuncio: string | null;
+  imagens: string[] | null;
   fonteNome: string | null;
   fonteUrl: string | null;
 };
@@ -56,7 +57,12 @@ function ImovelCard({
   return (
     <div className="imovel-card">
       <div className="imovel-img">
-        <Home size={36} style={{ color: "#8fa3c0", strokeWidth: 1.25 }} />
+        {imovel.imagens?.[0] ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={imovel.imagens[0]} alt={imovel.titulo ?? "Imóvel"} />
+        ) : (
+          <Home size={36} style={{ color: "#8fa3c0", strokeWidth: 1.25 }} />
+        )}
       </div>
       <div className="imovel-body">
         <div

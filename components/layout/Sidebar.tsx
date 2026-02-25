@@ -2,21 +2,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  LayoutGrid,
-  Search,
-  Clock,
-  Link2,
-  Settings,
-  Heart,
-} from "lucide-react";
+import { LayoutGrid, Search, Clock, Link2, Settings, Heart } from "lucide-react";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutGrid, section: "Principal" },
   { href: "/buscador", label: "Buscador", icon: Search, section: null },
   { href: "/historico", label: "Histórico", icon: Clock, section: null },
   { href: "/favoritos", label: "Favoritos", icon: Heart, section: null },
-  { href: "/fontes", label: "Fontes", icon: Link2, section: "Configurações", badgeDanger: true },
+  { href: "/fontes", label: "Fontes", icon: Link2, section: "Configurações" },
   { href: "/configuracoes", label: "Configurações", icon: Settings, section: null },
 ];
 
@@ -24,19 +17,21 @@ interface SidebarProps {
   userName?: string;
   userPlan?: string;
   userInitial?: string;
-  aiSearchesUsed?: number;
-  aiSearchesTotal?: number;
+  fontesUsed?: number;
+  fontesTotal?: number;
+  fontesErroCount?: number;
 }
 
 export function Sidebar({
   userName = "Usuário",
   userPlan = "Plano Gratuito",
   userInitial = "U",
-  aiSearchesUsed = 0,
-  aiSearchesTotal = 10,
+  fontesUsed = 0,
+  fontesTotal = 5,
+  fontesErroCount = 0,
 }: SidebarProps) {
   const pathname = usePathname();
-  const aiPercent = Math.round((aiSearchesUsed / aiSearchesTotal) * 100);
+  const fontesPercent = fontesTotal > 0 ? Math.round((fontesUsed / fontesTotal) * 100) : 0;
 
   let lastSection: string | null = null;
 
@@ -44,7 +39,13 @@ export function Sidebar({
     <aside className="sidebar">
       <div className="sidebar-logo">
         <div className="sidebar-logo-mark">
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
             <circle cx="11" cy="11" r="8" />
             <path strokeLinecap="round" d="M21 21l-4.35-4.35" />
           </svg>
@@ -62,21 +63,15 @@ export function Sidebar({
 
           const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
           const Icon = item.icon;
+          const showBadge = item.href === "/fontes" && fontesErroCount > 0;
 
           return (
             <div key={item.href}>
-              {showSection && (
-                <div className="sidebar-section-title">{item.section}</div>
-              )}
-              <Link
-                href={item.href}
-                className={`sidebar-item ${isActive ? "active" : ""}`}
-              >
+              {showSection && <div className="sidebar-section-title">{item.section}</div>}
+              <Link href={item.href} className={`sidebar-item ${isActive ? "active" : ""}`}>
                 <Icon />
                 {item.label}
-                {item.badgeDanger && (
-                  <span className="sidebar-badge-danger">!</span>
-                )}
+                {showBadge && <span className="sidebar-badge-danger">!</span>}
               </Link>
             </div>
           );
@@ -86,11 +81,13 @@ export function Sidebar({
       <div className="sidebar-bottom">
         <div className="sidebar-progress">
           <div className="sidebar-progress-label">
-            <span>Buscas IA hoje</span>
-            <span>{aiSearchesUsed}/{aiSearchesTotal}</span>
+            <span>Fontes cadastradas</span>
+            <span>
+              {fontesUsed}/{fontesTotal}
+            </span>
           </div>
           <div className="sidebar-progress-bar">
-            <div className="sidebar-progress-fill" style={{ width: `${aiPercent}%` }} />
+            <div className="sidebar-progress-fill" style={{ width: `${fontesPercent}%` }} />
           </div>
         </div>
         <div className="sidebar-user">

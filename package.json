@@ -10,7 +10,8 @@
     "db:generate": "doppler run -- drizzle-kit generate",
     "db:migrate": "doppler run -- drizzle-kit migrate",
     "db:push": "doppler run -- drizzle-kit push --force",
-    "db:studio": "doppler run -- drizzle-kit studio"
+    "db:studio": "doppler run -- drizzle-kit studio",
+    "db:seed": "doppler run -- npx tsx scripts/seed.ts"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.11.1",

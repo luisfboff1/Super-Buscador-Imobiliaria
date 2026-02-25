@@ -9,6 +9,7 @@ export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl;
 
   const filtros = {
+    q: searchParams.get("q") ?? undefined,
     tipo: searchParams.get("tipo") ?? undefined,
     cidade: searchParams.get("cidade") ?? undefined,
     bairro: searchParams.get("bairro") ?? undefined,
