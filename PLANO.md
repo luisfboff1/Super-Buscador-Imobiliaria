@@ -601,13 +601,23 @@ NEXT_PUBLIC_APP_URL=https://app.buscador.com
 
 ### Fase 1 — MVP (até 11/03) 🎯
 
-- [ ] Setup Next.js 15 + shadcn + Drizzle + Neon
-- [ ] Autenticação básica com Clerk (sem multi-org ainda)
-- [ ] Schema do banco de dados (schema único inicial)
-- [ ] Cadastro manual de fontes (URLs de imobiliárias)
+- [x] Setup Next.js 16.1.6 + Tailwind v4 + Drizzle + Neon *(25/02)*
+- [x] Schema do banco de dados com Drizzle ORM *(25/02)*
+- [x] Estrutura de pastas completa (App Router) *(25/02)*
+- [x] Design system fiel aos mockups (CSS vars, componentes) *(25/02)*
+- [x] Layout base: Sidebar + Topbar responsivos *(25/02)*
+- [x] Página de Sign-in com visual definido *(25/02)*
+- [x] Dashboard com stats e buscas recentes *(25/02)*
+- [x] Página de Fontes com cards de status *(25/02)*
+- [x] Formulário de adicionar fonte manualmente *(25/02)*
+- [x] Buscador com filtros tradicionais e grid de cards *(25/02)*
+- [x] Histórico de buscas *(25/02)*
+- [x] Favoritos *(25/02)*
+- [x] Configurações *(25/02)*
+- [x] API route `/api/fontes` (GET + POST) *(25/02)*
+- [ ] Autenticação funcional com Clerk (requer chaves de API)
+- [ ] Conexão real com Neon (requer DATABASE_URL)
 - [ ] Crawler básico com Playwright (1-2 parsers)
-- [ ] Busca por filtros tradicionais (caixinhas)
-- [ ] Exibição de resultados em cards
 - [ ] Deploy na Vercel
 
 **Objetivo: protótipo crudo funcional para apresentar ao Mateus**

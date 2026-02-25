@@ -68,103 +68,295 @@
     </div>
   </div>
 
-  <div class="page-inner">
-    <div class="chat-bar" style="margin-bottom:20px;">
-      <div class="chat-ai-icon">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-      </div>
-      <input class="chat-input" type="text" value="apartamento 2 quartos perto do parque moinhos" readonly>
-      <button class="chat-send">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-      </button>
-    </div>
+  <div style="display:grid;grid-template-columns:340px 1fr;gap:0;height:calc(100vh - 56px);">
 
-    <div class="filter-bar" style="margin-bottom:20px;">
-      <div class="filter-chips">
-        <span class="filter-chip active">Todos (42)</span>
-        <span class="filter-chip">Apartamentos (31)</span>
-        <span class="filter-chip">Casas (8)</span>
-        <span class="filter-chip">Coberturas (3)</span>
-      </div>
-      <div style="display:flex;align-items:center;gap:8px;margin-left:auto;">
-        <select style="padding:7px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:12.5px;font-family:'Inter',sans-serif;color:#374151;background:#fff;outline:none;">
-          <option>Menor preço</option>
-          <option>Maior preço</option>
-          <option>Mais recente</option>
-          <option>Maior área</option>
-        </select>
-      </div>
-    </div>
-
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;">
-      <div class="imovel-card">
-        <div class="imovel-img">
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.25"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+    <!-- PAINEL DE CHAT IA -->
+    <div style="border-right:1px solid var(--border);display:flex;flex-direction:column;background:rgba(255,255,255,0.6);backdrop-filter:blur(12px);">
+      <!-- header do chat -->
+      <div style="padding:14px 16px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;">
+        <div class="chat-ai-icon" style="flex-shrink:0;">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M12 2a9 9 0 00-9 9c0 2.39.94 4.56 2.47 6.17L4 22l5.09-1.37A8.96 8.96 0 0012 21a9 9 0 000-18z"/><path d="M8 10h8M8 14h5"/></svg>
         </div>
-        <div class="imovel-body">
-          <div class="imovel-price">R$ 380.000</div>
-          <div class="imovel-title">Apto 2 quartos — Moinhos de Vento</div>
-          <div class="imovel-meta">
-            <span class="imovel-stat"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M2 4a2 2 0 012-2h16a2 2 0 012 2v12a2 2 0 01-2 2H4a2 2 0 01-2-2V4z"/><path d="M2 10h20"/></svg>2 qtos</span>
-            <span class="imovel-stat"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M9 6h10v6H9z"/><path d="M5 20h14"/><path d="M5 14v6"/></svg>1 ban</span>
-            <span class="imovel-stat"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><rect x="3" y="3" width="18" height="18" rx="1"/></svg>72m²</span>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:#0f172a;line-height:1.2;">Busca com IA</div>
+          <div style="font-size:11.5px;color:#64748b;">6 de 10 buscas hoje</div>
+        </div>
+        <button onclick="void(0)" style="margin-left:auto;width:28px;height:28px;border-radius:7px;border:1.5px solid #e2e8f0;background:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;" title="Nova conversa">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;color:#64748b;"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+      </div>
+
+      <!-- mensagens -->
+      <div class="chat-messages" style="flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:14px;">
+
+        <div class="chat-msg ai">
+          <div class="chat-ai-icon" style="flex-shrink:0;align-self:flex-start;margin-top:2px;">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M12 2a9 9 0 00-9 9c0 2.39.94 4.56 2.47 6.17L4 22l5.09-1.37A8.96 8.96 0 0012 21a9 9 0 000-18z"/></svg>
           </div>
-          <div class="imovel-source">imobhorizonte.com.br</div>
+          <div class="chat-bubble" style="background:rgba(255,255,255,0.9);border:1px solid var(--glass-border);border-radius:2px 12px 12px 12px;">
+            Olá, Mateus! Como posso ajudar sua busca hoje? Descreva o imóvel ideal e eu encontro nas suas fontes cadastradas.
+          </div>
         </div>
-        <div class="imovel-actions">
-          <a href="#" class="btn btn-ghost" style="flex:1;justify-content:center;">Ver detalhes</a>
-          <button class="btn btn-icon" title="Favoritar">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+
+        <div class="chat-msg user">
+          <div class="sidebar-avatar" style="flex-shrink:0;align-self:flex-start;margin-top:2px;width:26px;height:26px;font-size:10px;">M</div>
+          <div class="chat-bubble">apartamento 2 quartos perto do parque moinhos</div>
+        </div>
+
+        <div class="chat-msg ai">
+          <div class="chat-ai-icon" style="flex-shrink:0;align-self:flex-start;margin-top:2px;">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M12 2a9 9 0 00-9 9c0 2.39.94 4.56 2.47 6.17L4 22l5.09-1.37A8.96 8.96 0 0012 21a9 9 0 000-18z"/></svg>
+          </div>
+          <div class="chat-bubble" style="background:rgba(255,255,255,0.9);border:1px solid var(--glass-border);border-radius:2px 12px 12px 12px;">
+            Encontrei <strong>42 imóveis</strong> com 2 quartos nos bairros Moinhos de Vento, Bela Vista e Independência — todos a menos de 1,5 km do parque.<br><br>
+            Preços entre <strong>R$ 290.000</strong> e <strong>R$ 680.000</strong>. Quer que eu filtre por faixa de preço ou metragem?
+          </div>
+        </div>
+
+        <div class="chat-msg user">
+          <div class="sidebar-avatar" style="flex-shrink:0;align-self:flex-start;margin-top:2px;width:26px;height:26px;font-size:10px;">M</div>
+          <div class="chat-bubble">prefiro até R$450mil, com pelo menos 70m²</div>
+        </div>
+
+        <!-- CONFIRMATION CARD -->
+        <div class="chat-msg ai">
+          <div class="chat-ai-icon" style="flex-shrink:0;align-self:flex-start;margin-top:2px;">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M12 2a9 9 0 00-9 9c0 2.39.94 4.56 2.47 6.17L4 22l5.09-1.37A8.96 8.96 0 0012 21a9 9 0 000-18z"/></svg>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px;max-width:240px;">
+            <div class="chat-bubble" style="background:rgba(255,255,255,0.9);border:1px solid var(--glass-border);border-radius:2px 12px 4px 12px;padding-bottom:6px;">
+              Confirmei os parâmetros da busca. Posso iniciar?
+            </div>
+            <div style="background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;padding:11px 13px;font-size:12px;display:flex;flex-direction:column;gap:7px;">
+              <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px;">Parâmetros detectados</div>
+              <div style="display:flex;align-items:center;gap:7px;color:#0f172a;">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75" style="width:13px;height:13px;flex-shrink:0;color:#2563eb;"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+                <span><strong>Tipo:</strong> Apartamento</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:7px;color:#0f172a;">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75" style="width:13px;height:13px;flex-shrink:0;color:#2563eb;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                <span><strong>Local:</strong> Moinhos de Vento, até 1,5km</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:7px;color:#0f172a;">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75" style="width:13px;height:13px;flex-shrink:0;color:#2563eb;"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
+                <span><strong>Preço:</strong> até R$ 450.000</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:7px;color:#0f172a;">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75" style="width:13px;height:13px;flex-shrink:0;color:#2563eb;"><rect x="3" y="3" width="18" height="18" rx="1"/></svg>
+                <span><strong>Área:</strong> mín. 70 m²</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:7px;color:#0f172a;">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75" style="width:13px;height:13px;flex-shrink:0;color:#2563eb;"><path d="M2 4a2 2 0 012-2h16a2 2 0 012 2v12a2 2 0 01-2 2H4a2 2 0 01-2-2V4z"/><path d="M2 10h20"/></svg>
+                <span><strong>Quartos:</strong> 2+</span>
+              </div>
+              <div style="display:flex;gap:6px;margin-top:4px;">
+                <button style="flex:1;padding:6px 0;background:#2563eb;color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:600;font-family:'Inter',sans-serif;cursor:pointer;">Confirmar busca</button>
+                <button style="padding:6px 12px;background:#f1f5f9;color:#374151;border:1.5px solid #e2e8f0;border-radius:7px;font-size:12px;font-family:'Inter',sans-serif;cursor:pointer;">Ajustar</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="chat-msg ai">
+          <div class="chat-ai-icon" style="flex-shrink:0;align-self:flex-start;margin-top:2px;">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M12 2a9 9 0 00-9 9c0 2.39.94 4.56 2.47 6.17L4 22l5.09-1.37A8.96 8.96 0 0012 21a9 9 0 000-18z"/></svg>
+          </div>
+          <div class="chat-bubble" style="background:rgba(255,255,255,0.9);border:1px solid var(--glass-border);border-radius:2px 12px 12px 12px;">
+            Encontrei <strong>18 imóveis</strong> com esses filtros. Os de Moinhos têm melhor custo/m² — os 3 primeiros são os mais relevantes.
+          </div>
+        </div>
+
+      </div>
+
+      <!-- input de chat -->
+      <div style="padding:12px 14px;border-top:1px solid var(--border);">
+        <div style="display:flex;align-items:center;gap:8px;background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;padding:8px 10px 8px 14px;transition:border .15s;" onfocusin="this.style.borderColor='#2563eb'" onfocusout="this.style.borderColor='#e2e8f0'">
+          <input type="text" placeholder="Refine sua busca..." style="flex:1;border:none;outline:none;font-size:13px;font-family:'Inter',sans-serif;color:#0f172a;background:transparent;">
+          <button style="width:30px;height:30px;border-radius:7px;background:#2563eb;border:none;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" style="width:13px;height:13px;color:#fff;"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
           </button>
         </div>
-      </div>
-
-      <div class="imovel-card">
-        <div class="imovel-img">
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.25"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-        </div>
-        <div class="imovel-body">
-          <div class="imovel-price">R$ 425.000</div>
-          <div class="imovel-title">Apartamento 2 dorms com vaga — Independência</div>
-          <div class="imovel-meta">
-            <span class="imovel-stat"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M2 4a2 2 0 012-2h16a2 2 0 012 2v12a2 2 0 01-2 2H4a2 2 0 01-2-2V4z"/><path d="M2 10h20"/></svg>2 qtos</span>
-            <span class="imovel-stat"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M9 6h10v6H9z"/><path d="M5 20h14"/><path d="M5 14v6"/></svg>2 ban</span>
-            <span class="imovel-stat"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><rect x="3" y="3" width="18" height="18" rx="1"/></svg>85m²</span>
-          </div>
-          <div class="imovel-source">realtysul.com.br</div>
-        </div>
-        <div class="imovel-actions">
-          <a href="#" class="btn btn-ghost" style="flex:1;justify-content:center;">Ver detalhes</a>
-          <button class="btn btn-icon" title="Favoritar">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
-          </button>
-        </div>
-      </div>
-
-      <div class="imovel-card">
-        <div class="imovel-img">
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.25"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-        </div>
-        <div class="imovel-body">
-          <div class="imovel-price">R$ 310.000</div>
-          <div class="imovel-title">Apto 2 quartos — Bom Fim</div>
-          <div class="imovel-meta">
-            <span class="imovel-stat"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M2 4a2 2 0 012-2h16a2 2 0 012 2v12a2 2 0 01-2 2H4a2 2 0 01-2-2V4z"/><path d="M2 10h20"/></svg>2 qtos</span>
-            <span class="imovel-stat"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M9 6h10v6H9z"/><path d="M5 20h14"/><path d="M5 14v6"/></svg>1 ban</span>
-            <span class="imovel-stat"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><rect x="3" y="3" width="18" height="18" rx="1"/></svg>61m²</span>
-          </div>
-          <div class="imovel-source">casasul.imob.com.br</div>
-        </div>
-        <div class="imovel-actions">
-          <a href="#" class="btn btn-ghost" style="flex:1;justify-content:center;">Ver detalhes</a>
-          <button class="btn btn-icon" title="Favoritar">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
-          </button>
+        <div style="margin-top:7px;display:flex;gap:5px;flex-wrap:wrap;">
+          <button style="padding:4px 10px;border:1px solid #e2e8f0;border-radius:20px;background:#f8fafc;font-size:11.5px;color:#64748b;cursor:pointer;font-family:'Inter',sans-serif;">com vaga</button>
+          <button style="padding:4px 10px;border:1px solid #e2e8f0;border-radius:20px;background:#f8fafc;font-size:11.5px;color:#64748b;cursor:pointer;font-family:'Inter',sans-serif;">aceita pets</button>
+          <button style="padding:4px 10px;border:1px solid #e2e8f0;border-radius:20px;background:#f8fafc;font-size:11.5px;color:#64748b;cursor:pointer;font-family:'Inter',sans-serif;">perto de escola</button>
         </div>
       </div>
     </div>
 
-    <div style="margin-top:12px;font-size:12.5px;color:#94a3b8;text-align:center;">Mostrando 3 de 42 imóveis</div>
+    <!-- ÁREA DE RESULTADOS -->
+    <div style="overflow-y:auto;display:flex;flex-direction:column;">
+
+      <!-- BARRA DE FILTROS -->
+      <div style="padding:14px 20px 12px;border-bottom:1px solid var(--border);background:rgba(255,255,255,0.82);backdrop-filter:blur(10px);position:sticky;top:0;z-index:10;">
+        <!-- Linha 1: filtros ativos -->
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:10px;">
+          <span style="font-size:11.5px;color:#64748b;font-weight:500;margin-right:2px;">Filtros:</span>
+          <span style="display:inline-flex;align-items:center;gap:5px;padding:3px 9px;background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:20px;font-size:12px;font-weight:500;">
+            Moinhos de Vento
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" style="width:11px;height:11px;cursor:pointer;opacity:.7;"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </span>
+          <span style="display:inline-flex;align-items:center;gap:5px;padding:3px 9px;background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:20px;font-size:12px;font-weight:500;">
+            até R$ 450.000
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" style="width:11px;height:11px;cursor:pointer;opacity:.7;"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </span>
+          <span style="display:inline-flex;align-items:center;gap:5px;padding:3px 9px;background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:20px;font-size:12px;font-weight:500;">
+            mín. 70 m²
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" style="width:11px;height:11px;cursor:pointer;opacity:.7;"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </span>
+          <span style="display:inline-flex;align-items:center;gap:5px;padding:3px 9px;background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:20px;font-size:12px;font-weight:500;">
+            2+ quartos
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" style="width:11px;height:11px;cursor:pointer;opacity:.7;"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </span>
+          <button style="margin-left:2px;padding:3px 9px;background:transparent;color:#94a3b8;border:none;font-size:12px;cursor:pointer;font-family:'Inter',sans-serif;">Limpar tudo</button>
+        </div>
+        <!-- Linha 2: dropdowns + ordenar -->
+        <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
+          <select style="padding:6px 10px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:12px;font-family:'Inter',sans-serif;color:#374151;background:#fff;outline:none;cursor:pointer;">
+            <option>Tipo: Todos</option>
+            <option selected>Apartamento</option>
+            <option>Cobertura</option>
+            <option>Casa</option>
+          </select>
+          <select style="padding:6px 10px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:12px;font-family:'Inter',sans-serif;color:#374151;background:#fff;outline:none;cursor:pointer;">
+            <option>Quartos: Todos</option>
+            <option>1+</option>
+            <option selected>2+</option>
+            <option>3+</option>
+            <option>4+</option>
+          </select>
+          <select style="padding:6px 10px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:12px;font-family:'Inter',sans-serif;color:#374151;background:#fff;outline:none;cursor:pointer;">
+            <option>Banheiros: Todos</option>
+            <option>1+</option>
+            <option>2+</option>
+          </select>
+          <select style="padding:6px 10px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:12px;font-family:'Inter',sans-serif;color:#374151;background:#fff;outline:none;cursor:pointer;">
+            <option>Preço: Todos</option>
+            <option>até R$ 300k</option>
+            <option>até R$ 400k</option>
+            <option selected>até R$ 450k</option>
+            <option>até R$ 600k</option>
+          </select>
+          <select style="padding:6px 10px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:12px;font-family:'Inter',sans-serif;color:#374151;background:#fff;outline:none;cursor:pointer;">
+            <option>Área: Todos</option>
+            <option>50+ m²</option>
+            <option selected>70+ m²</option>
+            <option>90+ m²</option>
+            <option>120+ m²</option>
+          </select>
+          <div style="margin-left:auto;display:flex;align-items:center;gap:6px;">
+            <span style="font-size:12px;color:#64748b;">18 imóveis</span>
+            <select style="padding:6px 10px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:12px;font-family:'Inter',sans-serif;color:#374151;background:#fff;outline:none;cursor:pointer;">
+              <option>Menor preço</option>
+              <option>Maior preço</option>
+              <option>Maior área</option>
+              <option>Mais recente</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- GRID DE CARDS -->
+      <div style="padding:18px 20px;display:grid;grid-template-columns:repeat(2,1fr);gap:14px;align-content:start;">
+
+        <div class="imovel-card">
+          <div class="imovel-img" style="background:none;padding:0;overflow:hidden;">
+            <img src="https://picsum.photos/seed/apt101/400/220" alt="Foto do imóvel" style="width:100%;height:100%;object-fit:cover;display:block;" loading="lazy">
+          </div>
+          <div class="imovel-body">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px;">
+              <div>
+                <div class="imovel-price">R$ 380.000</div>
+                <div class="imovel-title">Apto 2 quartos — Moinhos de Vento</div>
+              </div>
+              <span style="flex-shrink:0;padding:2px 7px;background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:20px;font-size:10.5px;font-weight:600;">Destaque</span>
+            </div>
+            <div class="imovel-meta">
+              <span class="imovel-stat"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M2 4a2 2 0 012-2h16a2 2 0 012 2v12a2 2 0 01-2 2H4a2 2 0 01-2-2V4z"/><path d="M2 10h20"/></svg>2 qtos</span>
+              <span class="imovel-stat"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M9 6h10v6H9z"/><path d="M5 20h14"/><path d="M5 14v6"/></svg>1 ban</span>
+              <span class="imovel-stat"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><rect x="3" y="3" width="18" height="18" rx="1"/></svg>72m²</span>
+            </div>
+            <div class="imovel-source">imobhorizonte.com.br</div>
+          </div>
+          <div class="imovel-actions">
+            <a href="#" class="btn btn-ghost" style="flex:1;justify-content:center;">Ver detalhes</a>
+            <button class="btn btn-icon" title="Favoritar"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg></button>
+          </div>
+        </div>
+
+        <div class="imovel-card">
+          <div class="imovel-img" style="background:none;padding:0;overflow:hidden;">
+            <img src="https://picsum.photos/seed/apt204/400/220" alt="Foto do imóvel" style="width:100%;height:100%;object-fit:cover;display:block;" loading="lazy">
+          </div>
+          <div class="imovel-body">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px;">
+              <div>
+                <div class="imovel-price">R$ 425.000</div>
+                <div class="imovel-title">Apartamento 2 dorms com vaga — Independência</div>
+              </div>
+              <span style="flex-shrink:0;padding:2px 7px;background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:20px;font-size:10.5px;font-weight:600;">Destaque</span>
+            </div>
+            <div class="imovel-meta">
+              <span class="imovel-stat"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M2 4a2 2 0 012-2h16a2 2 0 012 2v12a2 2 0 01-2 2H4a2 2 0 01-2-2V4z"/><path d="M2 10h20"/></svg>2 qtos</span>
+              <span class="imovel-stat"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M9 6h10v6H9z"/><path d="M5 20h14"/><path d="M5 14v6"/></svg>2 ban</span>
+              <span class="imovel-stat"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><rect x="3" y="3" width="18" height="18" rx="1"/></svg>85m²</span>
+            </div>
+            <div class="imovel-source">realtysul.com.br</div>
+          </div>
+          <div class="imovel-actions">
+            <a href="#" class="btn btn-ghost" style="flex:1;justify-content:center;">Ver detalhes</a>
+            <button class="btn btn-icon" title="Favoritar"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg></button>
+          </div>
+        </div>
+
+        <div class="imovel-card">
+          <div class="imovel-img" style="background:none;padding:0;overflow:hidden;">
+            <img src="https://picsum.photos/seed/apt309/400/220" alt="Foto do imóvel" style="width:100%;height:100%;object-fit:cover;display:block;" loading="lazy">
+          </div>
+          <div class="imovel-body">
+            <div>
+              <div class="imovel-price">R$ 310.000</div>
+              <div class="imovel-title">Apto 2 quartos — Bom Fim</div>
+            </div>
+            <div class="imovel-meta">
+              <span class="imovel-stat"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M2 4a2 2 0 012-2h16a2 2 0 012 2v12a2 2 0 01-2 2H4a2 2 0 01-2-2V4z"/><path d="M2 10h20"/></svg>2 qtos</span>
+              <span class="imovel-stat"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M9 6h10v6H9z"/><path d="M5 20h14"/><path d="M5 14v6"/></svg>1 ban</span>
+              <span class="imovel-stat"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><rect x="3" y="3" width="18" height="18" rx="1"/></svg>71m²</span>
+            </div>
+            <div class="imovel-source">casasul.imob.com.br</div>
+          </div>
+          <div class="imovel-actions">
+            <a href="#" class="btn btn-ghost" style="flex:1;justify-content:center;">Ver detalhes</a>
+            <button class="btn btn-icon" title="Favoritar"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg></button>
+          </div>
+        </div>
+
+        <div class="imovel-card">
+          <div class="imovel-img" style="background:none;padding:0;overflow:hidden;">
+            <img src="https://picsum.photos/seed/apt417/400/220" alt="Foto do imóvel" style="width:100%;height:100%;object-fit:cover;display:block;" loading="lazy">
+          </div>
+          <div class="imovel-body">
+            <div>
+              <div class="imovel-price">R$ 399.000</div>
+              <div class="imovel-title">Apto 2 quartos alto padrão — Moinhos</div>
+            </div>
+            <div class="imovel-meta">
+              <span class="imovel-stat"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M2 4a2 2 0 012-2h16a2 2 0 012 2v12a2 2 0 01-2 2H4a2 2 0 01-2-2V4z"/><path d="M2 10h20"/></svg>2 qtos</span>
+              <span class="imovel-stat"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M9 6h10v6H9z"/><path d="M5 20h14"/><path d="M5 14v6"/></svg>2 ban</span>
+              <span class="imovel-stat"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><rect x="3" y="3" width="18" height="18" rx="1"/></svg>79m²</span>
+            </div>
+            <div class="imovel-source">imovelprime.com.br</div>
+          </div>
+          <div class="imovel-actions">
+            <a href="#" class="btn btn-ghost" style="flex:1;justify-content:center;">Ver detalhes</a>
+            <button class="btn btn-icon" title="Favoritar"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg></button>
+          </div>
+        </div>
+
+      </div>
+      <div style="padding:0 20px 20px;font-size:12.5px;color:#94a3b8;text-align:center;">Mostrando 4 de 18 imóveis · <a href="#" style="color:#2563eb;text-decoration:none;">Carregar mais</a></div>
+    </div>
+
   </div>
 </main>
 </body>

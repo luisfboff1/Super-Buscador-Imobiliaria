@@ -1,0 +1,40 @@
+{
+  "name": "super-buscador",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --turbopack",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio"
+  },
+  "dependencies": {
+    "next": "^16.1.6",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "@clerk/nextjs": "^6.38.2",
+    "drizzle-orm": "^0.45.1",
+    "@neondatabase/serverless": "^0.10.4",
+    "zod": "^4.3.6",
+    "lucide-react": "^0.486.0",
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^2.6.0",
+    "class-variance-authority": "^0.7.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "drizzle-kit": "^0.31.0",
+    "eslint": "^9",
+    "eslint-config-next": "^16.1.6",
+    "@tailwindcss/postcss": "^4.1.7",
+    "tailwindcss": "^4.1.7",
+    "postcss": "^8.5.3"
+  }
+}
