@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { Plus, RefreshCw, AlertTriangle } from "lucide-react";
+import { Plus, AlertTriangle, Building } from "lucide-react";
 import { getFontesComContagem } from "@/lib/db/queries";
+import { FonteActions } from "@/components/fontes/FonteActions";
 
 const statusLabel: Record<string, { label: string; badge: string; dot: string }> = {
   ok: { label: "Ativo", badge: "badge-success", dot: "dot-green" },
@@ -31,6 +32,10 @@ export default async function FontesPage() {
           <div className="topbar-sub">Gerencie as imobiliárias que o sistema rastreia</div>
         </div>
         <div className="topbar-actions">
+          <Link href="/fontes/importar" className="btn btn-ghost">
+            <Building size={15} />
+            Importar via CRECI
+          </Link>
           <Link href="/fontes/nova" className="btn btn-primary">
             <Plus size={15} />
             Adicionar fonte
@@ -103,19 +108,7 @@ export default async function FontesPage() {
                 </div>
 
                 <div style={{ display: "flex", gap: "8px" }}>
-                  <button
-                    className="btn btn-ghost btn-sm"
-                    style={{ flex: 1, justifyContent: "center" }}
-                  >
-                    <RefreshCw size={13} />
-                    {fonte.status === "erro" ? "Tentar novamente" : "Sincronizar"}
-                  </button>
-                  <button
-                    className="btn btn-ghost btn-sm"
-                    style={{ flex: 1, justifyContent: "center" }}
-                  >
-                    {fonte.status === "erro" ? "Editar URL" : "Configurar"}
-                  </button>
+                  <FonteActions fonteId={fonte.id} status={fonte.status} />
                 </div>
               </div>
             );

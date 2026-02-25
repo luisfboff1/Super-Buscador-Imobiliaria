@@ -286,3 +286,102 @@ export async function getNavStats() {
     fontesErroCount: fontesErro.total,
   };
 }
+
+// ─── CRAWLER HELPERS ──────────────────────────────────────────────────────────
+
+export async function getFonteById(id: string) {
+  const [fonte] = await db
+    .select()
+    .from(tenantSchema.fontes)
+    .where(eq(tenantSchema.fontes.id, id))
+    .limit(1);
+  return fonte ?? null;
+}
+
+export type ImovelInput = {
+  urlAnuncio: string;
+  titulo?: string | null;
+  tipo?: string | null;
+  cidade?: string | null;
+  bairro?: string | null;
+  estado?: string | null;
+  preco?: number | null;
+  areaM2?: number | null;
+  quartos?: number | null;
+  banheiros?: number | null;
+  vagas?: number | null;
+  descricao?: string | null;
+  imagens?: string[];
+  caracteristicas?: Record<string, unknown>;
+};
+
+export async function upsertImoveis(fonteId: string, items: ImovelInput[]) {
+  if (items.length === 0) return;
+
+  const CHUNK = 50;
+  for (let i = 0; i < items.length; i += CHUNK) {
+    const chunk = items.slice(i, i + CHUNK);
+    await db
+      .insert(tenantSchema.imoveis)
+      .values(
+        chunk.map((item) => ({
+          fonteId,
+          urlAnuncio: item.urlAnuncio,
+          titulo: item.titulo ?? null,
+          tipo: item.tipo ?? null,
+          cidade: item.cidade ?? null,
+          bairro: item.bairro ?? null,
+          estado: item.estado ?? null,
+          preco: item.preco != null ? String(item.preco) : null,
+          areaM2: item.areaM2 != null ? String(item.areaM2) : null,
+          quartos: item.quartos ?? null,
+          banheiros: item.banheiros ?? null,
+          vagas: item.vagas ?? null,
+          descricao: item.descricao ?? null,
+          imagens: item.imagens ?? [],
+          caracteristicas: (item.caracteristicas ?? {}) as never,
+          disponivel: true,
+          updatedAt: new Date(),
+        }))
+      )
+      .onConflictDoUpdate({
+        target: tenantSchema.imoveis.urlAnuncio,
+        set: {
+          titulo: sql`excluded.titulo`,
+          tipo: sql`excluded.tipo`,
+          cidade: sql`excluded.cidade`,
+          bairro: sql`excluded.bairro`,
+          estado: sql`excluded.estado`,
+          preco: sql`excluded.preco`,
+          areaM2: sql`excluded.area_m2`,
+          quartos: sql`excluded.quartos`,
+          banheiros: sql`excluded.banheiros`,
+          vagas: sql`excluded.vagas`,
+          descricao: sql`excluded.descricao`,
+          imagens: sql`excluded.imagens`,
+          caracteristicas: sql`excluded.caracteristicas`,
+          disponivel: true,
+          updatedAt: new Date(),
+        },
+      });
+  }
+}
+
+export async function markImoveisIndisponiveis(fonteId: string, urlsAtivas: string[]) {
+  if (urlsAtivas.length === 0) return;
+  // Fetch all imoveis for this fonte, mark those NOT in urlsAtivas as unavailable
+  const all = await db
+    .select({ id: tenantSchema.imoveis.id, urlAnuncio: tenantSchema.imoveis.urlAnuncio })
+    .from(tenantSchema.imoveis)
+    .where(eq(tenantSchema.imoveis.fonteId, fonteId));
+
+  const activeSet = new Set(urlsAtivas);
+  const idsToDisable = all.filter((r) => !activeSet.has(r.urlAnuncio)).map((r) => r.id);
+
+  for (const id of idsToDisable) {
+    await db
+      .update(tenantSchema.imoveis)
+      .set({ disponivel: false, updatedAt: new Date() })
+      .where(eq(tenantSchema.imoveis.id, id));
+  }
+}

@@ -14,12 +14,17 @@
     "db:seed": "doppler run -- npx tsx scripts/seed.ts"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^3.0.33",
+    "@ai-sdk/react": "^3.0.102",
     "@auth/drizzle-adapter": "^1.11.1",
     "@neondatabase/serverless": "^0.10.4",
+    "ai": "^6.0.100",
     "bcryptjs": "^3.0.3",
+    "cheerio": "^1.2.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.1",
+    "inngest": "^3.52.3",
     "lucide-react": "^0.486.0",
     "next": "^16.1.6",
     "next-auth": "^5.0.0-beta.30",

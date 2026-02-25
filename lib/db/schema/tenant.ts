@@ -27,7 +27,7 @@ export const fontes = pgTable("fontes", {
 export const imoveis = pgTable("imoveis", {
   id: uuid("id").primaryKey().defaultRandom(),
   fonteId: uuid("fonte_id").references(() => fontes.id, { onDelete: "cascade" }).notNull(),
-  urlAnuncio: text("url_anuncio").notNull(),
+  urlAnuncio: text("url_anuncio").notNull().unique(),
   titulo: text("titulo"),
   tipo: text("tipo"), // apartamento | casa | terreno | comercial
   cidade: text("cidade"),
