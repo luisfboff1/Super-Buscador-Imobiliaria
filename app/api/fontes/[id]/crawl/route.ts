@@ -20,11 +20,8 @@ export async function POST(
     return NextResponse.json({ error: "Fonte não encontrada" }, { status: 404 });
   }
 
-  // Em produção (Inngest configurado corretamente), usa o job assíncrono
-  // Em dev (sem Inngest dev server), executa o crawl sincronamente
-  const useInngest = process.env.NODE_ENV === "production" || process.env.INNGEST_DEV === "1";
-
-  if (useInngest) {
+  // Em produção usa Inngest (durable jobs). Em dev executa sincronamente.
+  if (process.env.NODE_ENV === "production") {
     try {
       await inngest.send({
         name: "fontes/crawl.requested",
