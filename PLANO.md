@@ -599,47 +599,94 @@ NEXT_PUBLIC_APP_URL=https://app.buscador.com
 
 ## 12. Roadmap de Desenvolvimento
 
-### Fase 1 — MVP (até 11/03) 🎯
+> **Nota Auth:** Clerk foi substituído por **Auth.js v5** (next-auth@beta + DrizzleAdapter) para evitar conta extra. Suporte a e-mail+senha (bcrypt), Google OAuth e GitHub OAuth. proxy.ts (Next.js 16) protege rotas autenticadas.
 
+### Fase 1 — MVP ✅ CONCLUÍDA (25/02)
+
+**Infraestrutura:**
 - [x] Setup Next.js 16.1.6 + Tailwind v4 + Drizzle + Neon *(25/02)*
-- [x] Schema do banco de dados com Drizzle ORM *(25/02)*
-- [x] Estrutura de pastas completa (App Router) *(25/02)*
+- [x] Schema do banco: `users`, `accounts`, `sessions`, `fontes`, `imoveis`, `searches`, `favoritos`, `chat_messages`, `tenants`, `plans`, `verification_tokens` *(25/02)*
+- [x] Doppler para gestão de secrets (sincroniza com Vercel) *(25/02)*
+- [x] Build limpo sem erros TypeScript *(25/02)*
+
+**Autenticação (Auth.js v5):**
+- [x] Sign-up (e-mail + senha) → cria usuário no Neon com bcrypt *(25/02)*
+- [x] Sign-in (e-mail + senha) funcional e testado *(25/02)*
+- [x] Google OAuth — UI pronta; ⚠️ falta configurar credenciais em console.cloud.google.com
+- [x] GitHub OAuth — UI pronta; ⚠️ falta configurar credenciais em github.com/settings/developers
+- [x] Proteção de rotas via `proxy.ts` (Next.js 16) *(25/02)*
+
+**UI + Páginas (todas conectadas ao banco real):**
 - [x] Design system fiel aos mockups (CSS vars, componentes) *(25/02)*
-- [x] Layout base: Sidebar + Topbar responsivos *(25/02)*
-- [x] Página de Sign-in com visual definido *(25/02)*
-- [x] Dashboard com stats e buscas recentes *(25/02)*
-- [x] Página de Fontes com cards de status *(25/02)*
-- [x] Formulário de adicionar fonte manualmente *(25/02)*
-- [x] Buscador com filtros tradicionais e grid de cards *(25/02)*
-- [x] Histórico de buscas *(25/02)*
-- [x] Favoritos *(25/02)*
-- [x] Configurações *(25/02)*
-- [x] API route `/api/fontes` (GET + POST) *(25/02)*
-- [ ] Autenticação funcional com Clerk (requer chaves de API)
-- [ ] Conexão real com Neon (requer DATABASE_URL)
-- [ ] Crawler básico com Playwright (1-2 parsers)
-- [ ] Deploy na Vercel
+- [x] Sidebar com nome/inicial reais da sessão *(25/02)*
+- [x] Dashboard: stats reais (imóveis, fontes, buscas, favoritos) + buscas recentes *(25/02)*
+- [x] Fontes: lista real do banco com contagem de imóveis por fonte *(25/02)*
+- [x] Fontes → Nova: formulário conectado a `POST /api/fontes` *(25/02)*
+- [x] Buscador: chama `GET /api/imoveis` com filtros reais; favoritar chama `POST /api/favoritos` *(25/02)*
+- [x] Histórico: buscas reais do usuário logado *(25/02)*
+- [x] Favoritos: imóveis reais do banco com JOIN *(25/02)*
+- [x] Configurações: nome/email reais; salvar nome via `PATCH /api/user/profile`; stats reais de fontes *(25/02)*
 
-**Objetivo: protótipo crudo funcional para apresentar ao Mateus**
+**APIs implementadas:**
+- [x] `GET/POST /api/fontes` — listar e criar fontes
+- [x] `DELETE /api/fontes/[id]` — remover fonte
+- [x] `GET /api/imoveis` — busca com filtros (tipo, cidade, preço, quartos, área)
+- [x] `GET/POST /api/favoritos` — listar e toggle favorito
+- [x] `POST /api/auth/register` — cadastro com bcrypt
+- [x] `PATCH /api/user/profile` — atualizar nome do usuário
 
-### Fase 2 — AI + Multi-tenant (Março/Abril)
+**Mocks ainda presentes (a corrigir):**
+- ⚠️ Sidebar: `aiSearchesUsed={0}` hardcoded — barra de "Buscas IA hoje" é decorativa (AI não implementada)
+- ⚠️ Sidebar: `badgeDanger` em Fontes sempre visível (deveria ser dinâmico baseado em erros)
+- ⚠️ Buscador: campo de busca livre (`q`) enviado para API mas não processado na query SQL — apenas filtros clássicos funcionam
+- ⚠️ DB vazio: sem crawler real, `imoveis` está vazia — buscas sempre retornam zero resultados
 
-- [ ] Multi-tenancy completo (Clerk Organizations + schemas Neon)
-- [ ] Chat AI com Vercel AI SDK e tool calling
-- [ ] Memória de conversas por usuário
-- [ ] Import de fontes via Excel
-- [ ] Extração CRECI por cidade
-- [ ] Export de resultados para Excel
-- [ ] Histórico de buscas e favoritos
+---
+
+### Fase 2 — Crawler + AI (Março/Abril) 🔜
+
+**Crawler de imobiliárias (prioridade máxima — sem isso o buscador fica vazio):**
+- [ ] Inngest: configurar client e webhook `/api/webhooks/inngest`
+- [ ] Job `crawl-fonte`: Playwright/Crawlee abre URL → extrai imóveis → upsert no banco
+- [ ] Parsers dedicados: Tecimob, Jetimob (maior penetração no mercado BR)
+- [ ] Parser genérico (fallback LLM) para sites custom
+- [ ] Trigger crawl manual no painel de fontes (botão "Sincronizar" já existe na UI)
+- [ ] Re-crawl automático: agendamento a cada 24h via Inngest cron
+- [ ] Atualizar status da fonte: `pendente → crawling → ok | erro`
+
+**Extração de fontes via CRECI:**
+- [ ] `lib/creci/extractor.ts`: scraper do site do CRECI por cidade
+- [ ] `GET /api/creci/extract?cidade=Caxias+do+Sul` → retorna lista de imobiliárias registradas
+- [ ] Página `fontes/importar/page.tsx`: input de cidade → preview da lista → aprovação → importação em batch
+- [ ] ⚠️ CRECI = CRECI-RS em `http://www.creciRS.gov.br` ou similar — verificar URL correta
+
+**AI/LLM no Buscador:**
+- [ ] Instalar: `ai` (Vercel AI SDK v6), `@ai-sdk/openai`, `@ai-sdk/react`
+- [ ] `lib/ai/buscador-agent.ts`: `ToolLoopAgent` com tools `confirmar_filtros` e `buscar_imoveis`
+- [ ] `POST /api/chat` route handler com streaming
+- [ ] `components/buscador/SearchChat.tsx`: `useChat` do `@ai-sdk/react` com UI de chat
+- [ ] Integrar chat na página `/buscador` (tab ou modo alternativo ao filtro clássico)
+- [ ] Salvar busca no histórico quando AI executa `buscar_imoveis`
+- [ ] Busca livre (`q`) no `/api/imoveis`: implementar full-text search no Postgres
+
+**Import/Export:**
+- [ ] Import via Excel: drag-and-drop `.xlsx` → parse → preview → Inngest job para crawl em batch
+- [ ] Export Excel de resultados de busca (`/api/imoveis/export`)
+- [ ] Export Excel de favoritos
+
+---
 
 ### Fase 3 — SaaS Completo (Abril/Maio)
 
 - [ ] Sistema de planos e billing (Stripe)
-- [ ] Onboarding flow
+- [ ] Página `configuracoes/plano/page.tsx` — billing e upgrade
+- [ ] Onboarding flow: criar workspace → adicionar primeira fonte → aguardar crawl → primeira busca
+- [ ] Notificações por email (Resend): novos imóveis que combinam com buscas salvas
 - [ ] Dashboard de analytics por tenant
-- [ ] Parsers para principais plataformas imobiliárias BR
-- [ ] Notificações por email (novos imóveis que combinam com buscas salvas)
 - [ ] Landing page + página de preços
+- [ ] Multi-tenancy real (schemas Neon por tenant, atualmente single-tenant)
+
+---
 
 ### Fase 4 — Escala (Pós-lançamento)
 
@@ -706,11 +753,11 @@ npm install -D typescript@5.9.3 @types/node tsx
 
 ## 14. Próximos Passos Imediatos
 
-1. **Luis**: Inicializar repositório com estrutura base (Next.js + Neon + Clerk)
-2. **Luis**: Implementar crawler básico para 1-2 imobiliárias de teste de Caxias do Sul
-3. **Luis**: Montar UI da busca por filtros com dados mockados
-4. **Mateus**: Definir nome comercial e domínio do produto
-5. **Mateus**: Levantar lista inicial de imobiliárias de Caxias do Sul para testes
+1. **Luis**: Configurar credenciais Google OAuth em [console.cloud.google.com](https://console.cloud.google.com) e atualizar Doppler
+2. **Luis**: Implementar crawler básico (Inngest + Playwright) para 1-2 imobiliárias de Caxias do Sul
+3. **Luis**: Integrar AI/LLM no Buscador (Vercel AI SDK v6 + GPT-4o)
+4. **Mateus**: Levantar lista de imobiliárias de Caxias do Sul para testes de crawl
+5. **Mateus**: Definir nome comercial e domínio do produto
 6. **Ambos**: Reunião de revisão do protótipo em 11/03
 
 ---

@@ -17,10 +17,13 @@ export default function NovaFontePage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
-    // TODO: chamar API /api/fontes (POST)
-    await new Promise((r) => setTimeout(r, 1000));
-    setSuccess(true);
+    const res = await fetch("/api/fontes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(form),
+    });
     setLoading(false);
+    if (res.ok) setSuccess(true);
   }
 
   if (success) {
