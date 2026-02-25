@@ -171,25 +171,29 @@ export function parseHeuristico(html: string, baseUrl: string): ImovelInput[] {
 
 // ─── Schema LLM ──────────────────────────────────────────────────────────────
 
+// OpenAI structured outputs (strict mode) exige que TODOS os campos estejam em
+// `required`. Por isso usamos .nullable() em vez de .optional() — o campo é
+// obrigatório no schema mas pode ter valor null quando não encontrado.
 const ImovelSchema = z.object({
   imoveis: z.array(
     z.object({
       urlAnuncio: z
         .string()
-        .describe(
-          "URL absoluta do anúncio individual. NUNCA use a URL da homepage."
-        ),
-      titulo: z.string().optional(),
-      tipo: z.enum(["apartamento", "casa", "terreno", "comercial", "outro"]).optional(),
-      cidade: z.string().optional(),
-      bairro: z.string().optional(),
-      estado: z.string().optional().describe("Sigla do estado, ex: RS, SP"),
-      preco: z.number().optional().describe("Apenas o número inteiro, sem R$"),
-      areaM2: z.number().optional().describe("Apenas o número, sem m²"),
-      quartos: z.number().int().optional(),
-      banheiros: z.number().int().optional(),
-      vagas: z.number().int().optional(),
-      imagens: z.array(z.string()).optional(),
+        .describe("URL absoluta do anúncio individual. NUNCA use a URL da homepage."),
+      titulo: z.string().nullable().describe("Título do imóvel, ou null"),
+      tipo: z
+        .enum(["apartamento", "casa", "terreno", "comercial", "outro"])
+        .nullable()
+        .describe("Tipo do imóvel, ou null se não identificado"),
+      cidade: z.string().nullable(),
+      bairro: z.string().nullable(),
+      estado: z.string().nullable().describe("Sigla do estado, ex: RS, SP, ou null"),
+      preco: z.number().nullable().describe("Apenas o número inteiro sem R$, ou null"),
+      areaM2: z.number().nullable().describe("Apenas o número em m², ou null"),
+      quartos: z.number().int().nullable(),
+      banheiros: z.number().int().nullable(),
+      vagas: z.number().int().nullable().describe("Vagas de garagem, ou null"),
+      imagens: z.array(z.string()).nullable().describe("URLs das imagens, ou null"),
     })
   ),
 });

@@ -20,7 +20,8 @@ export async function POST(
     return NextResponse.json({ error: "Fonte não encontrada" }, { status: 404 });
   }
 
-  // Em produção usa Inngest (durable jobs). Em dev executa sincronamente.
+  // Em produção usa Inngest (durable jobs com retry).
+  // Em dev executa sincronamente (sem precisar do Inngest dev server).
   if (process.env.NODE_ENV === "production") {
     try {
       await inngest.send({
