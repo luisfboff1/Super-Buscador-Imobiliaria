@@ -7,6 +7,7 @@ import { encontrarProximaPagina } from "./parsers/utils";
 
 const MAX_PAGES = 20; // limite de paginação por crawl
 const FETCH_TIMEOUT_MS = 15_000;
+const PROBE_TIMEOUT_MS = 5_000; // timeout curto para probing de URL (sem Jina)
 
 const DEFAULT_HEADERS: HeadersInit = {
   "User-Agent":
@@ -32,7 +33,7 @@ async function fetchViaJina(url: string): Promise<string | null> {
   try {
     const jinaUrl = `https://r.jina.ai/${url}`;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 30_000); // Jina é mais lento
+    const timer = setTimeout(() => controller.abort(), 60_000); // Jina pode demorar até 60s
     const res = await fetch(jinaUrl, {
       headers: {
         "Accept": "text/html",
@@ -105,33 +106,62 @@ async function fetchPage(url: string, referer?: string): Promise<string | null> 
 }
 
 /**
- * Detecta qual URL de listagem de imóveis usar para uma imobiliária.
- * Muitos sites têm a listagem em /imoveis ou /venda, não na raiz.
+ * Fetch direto sem fallback Jina — usado apenas para probing rápido de URLs.
+ * Timeout curto (5s) para não bloquear a fase de detecção.
+ */
+async function fetchDireto(url: string): Promise<string | null> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+    const res = await fetch(url, {
+      headers: DEFAULT_HEADERS as Record<string, string>,
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    return await res.text();
+  } catch {
+    return null;
+  }
+}
+
+const IMOVEL_KEYWORDS = ["apartamento", "m²", "r$", "imovel", "imóvel", "venda", "aluguel"];
+
+function temConteudoImoveis(html: string): boolean {
+  const lower = html.toLowerCase();
+  return IMOVEL_KEYWORDS.some((k) => lower.includes(k));
+}
+
+/**
+ * Detecta qual URL de listagem de imóveis usar.
+ * Testa todos os candidatos em PARALELO para evitar timeouts sequenciais.
+ * Não usa Jina aqui — se o site bloquear o fetch direto, o crawl principal
+ * já tem Jina como fallback na fase de extração.
  */
 async function resolverUrlListagem(baseUrl: string): Promise<string> {
+  const base = baseUrl.replace(/\/$/, "");
   const candidatos = [
+    `${base}/imoveis`,
+    `${base}/imoveis-a-venda`,
+    `${base}/venda`,
+    `${base}/comprar`,
     baseUrl,
-    `${baseUrl.replace(/\/$/, "")}/imoveis`,
-    `${baseUrl.replace(/\/$/, "")}/venda`,
-    `${baseUrl.replace(/\/$/, "")}/comprar`,
-    `${baseUrl.replace(/\/$/, "")}/imoveis-a-venda`,
   ];
 
-  for (const url of candidatos) {
-    const html = await fetchPage(url);
-    if (!html) continue;
-    // Verifica se a página tem pelo menos alguma referência a imóveis
-    if (
-      html.toLowerCase().includes("apartamento") ||
-      html.toLowerCase().includes("m²") ||
-      html.toLowerCase().includes("r$") ||
-      html.toLowerCase().includes("imovel") ||
-      html.toLowerCase().includes("imóvel")
-    ) {
-      return url;
-    }
+  // Testa todos em paralelo, retorna o primeiro que tiver conteúdo de imóveis
+  const resultados = await Promise.allSettled(
+    candidatos.map(async (url) => {
+      const html = await fetchDireto(url);
+      if (html && temConteudoImoveis(html)) return url;
+      throw new Error("sem conteúdo");
+    })
+  );
+
+  for (const r of resultados) {
+    if (r.status === "fulfilled") return r.value;
   }
 
+  // Nenhum candidato funcionou via fetch direto — usa baseUrl e deixa Jina agir no crawl
   return baseUrl;
 }
 
