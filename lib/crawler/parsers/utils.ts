@@ -47,22 +47,35 @@ export function toAbsoluteUrl(href: string, baseUrl: string): string {
 
 /** Detecta próxima página de paginação no HTML */
 export function encontrarProximaPagina(html: string, baseUrl: string): string | null {
-  const patterns = [
-    // Link rel="next"
-    /<link[^>]+rel=["']next["'][^>]+href=["']([^"']+)["']/i,
-    // Botão/link "Próxima" ou ">"
-    /href=["']([^"']+)["'][^>]*>(?:\s*(?:próxima?|next|avançar|&gt;|›|»|>)\s*)</i,
-    // Parâmetro de paginação
-    /href=["']([^"']*[?&](?:pagina|page|pg|p)=(\d+)[^"']*)["']/gi,
-  ];
+  // 1. <link rel="next"> (SEO canonical, mais confiável)
+  const relNext =
+    html.match(/<link[^>]+rel=["']next["'][^>]+href=["']([^"']+)["']/i) ??
+    html.match(/<link[^>]+href=["']([^"']+)["'][^>]+rel=["']next["']/i);
+  if (relNext) return toAbsoluteUrl(relNext[1], baseUrl);
 
-  for (const pattern of patterns) {
-    const match = html.match(pattern);
-    if (match) {
-      const href = match[1];
-      return toAbsoluteUrl(href, baseUrl);
+  // 2. Botão/link "Próxima" ou seta
+  const nextBtn = html.match(
+    /href=["']([^"']+)["'][^>]*>\s*(?:próxima?|next|avançar|&gt;|›|»|>)\s*</i
+  );
+  if (nextBtn) return toAbsoluteUrl(nextBtn[1], baseUrl);
+
+  // 3. Parâmetro de paginação — usa exec() (não .match() com flag g, que perde grupos de captura)
+  // Encontra a página imediatamente seguinte à atual (currentPage + 1)
+  const currentPageMatch = baseUrl.match(/[?&](?:pagina|page|pg|p)=(\d+)/i);
+  const currentPage = currentPageMatch ? parseInt(currentPageMatch[1], 10) : 1;
+
+  const pageRe = /href=["']([^"']*[?&](?:pagina|page|pg|p)=(\d+)[^"']*)["']/gi;
+  let bestHref: string | null = null;
+  let bestDist = Infinity;
+  let m: RegExpExecArray | null;
+  while ((m = pageRe.exec(html)) !== null) {
+    const pageNum = parseInt(m[2], 10);
+    if (pageNum > currentPage && pageNum - currentPage < bestDist) {
+      bestDist = pageNum - currentPage;
+      bestHref = m[1];
     }
   }
+  if (bestHref) return toAbsoluteUrl(bestHref, baseUrl);
 
   return null;
 }

@@ -13,16 +13,50 @@ const CARD_SELECTORS = [
   "[class*='imovel']",
   "[class*='property']",
   "[class*='listing']",
-  "[class*='card-imovel']",
-  "[class*='card-property']",
+  "[class*='card']",
   "[class*='resultado']",
-  "[class*='item-']",
-  "[class*='-item']",
+  "[class*='anuncio']",
+  "[class*='item']",
+  "[class*='imobi']",
+  "li[class]",
 ].join(", ");
 
 // Padrões de URL que indicam uma página de detalhe de imóvel
 const LISTING_PATH_RE =
   /\/(imovel|property|venda|aluguel|residencial|comercial|casa|apartamento|terreno|lote)[\/-]|\/\d+[\/-]|\/[a-z]+-\d+/i;
+
+// Padrões que indicam URLs inválidas (CDN, Cloudflare challenge, tokens, etc.)
+const URL_INVALIDA_RE = [
+  /cdn-cgi/,           // Cloudflare CDN/challenge
+  /\/challenge/,       // páginas de challenge
+  /[?&][^=]+=.{50,}/,  // query params com tokens longos (>50 chars)
+  /\/[A-Za-z0-9_-]{40,}$/, // paths com hashes/tokens longos no final
+  /logout|login|signin|signup|cadastro|conta|perfil|contato|sobre|blog|politica|privacidade/i,
+];
+
+/**
+ * Verifica se uma URL parece ser uma página de listagem de imóvel válida.
+ * Rejeita URLs de CDN, Cloudflare challenge, tokens de segurança, etc.
+ */
+function isUrlValida(url: string, baseUrl: string): boolean {
+  if (!url || !url.startsWith("http")) return false;
+  // Deve ser do mesmo domínio
+  try {
+    const urlHost = new URL(url).hostname;
+    const baseHost = new URL(baseUrl).hostname;
+    if (urlHost !== baseHost) return false;
+  } catch {
+    return false;
+  }
+  // Não pode ser a homepage em si
+  const urlPath = new URL(url).pathname;
+  if (urlPath === "/" || urlPath === "") return false;
+  // Não pode ter padrões de URL inválida
+  for (const re of URL_INVALIDA_RE) {
+    if (re.test(url)) return false;
+  }
+  return true;
+}
 
 // ─── Extração de card HTML (heurístico) ──────────────────────────────────────
 
@@ -37,19 +71,47 @@ function extrairCardHtmls(html: string, baseUrl: string): string[] {
   const vistos = new Set<string>();
   const cards: string[] = [];
 
+  // Estratégia 1: seletores por nome de classe
   $(CARD_SELECTORS).each((_, el) => {
     const $el = $(el);
     const text = $el.text().replace(/\s+/g, " ").trim();
-
     if (!/R\$\s*[\d.,]+/.test(text)) return;
-    // Evita duplicar cards (pai contendo filho já adicionado)
     if (vistos.has(text.slice(0, 80))) return;
     vistos.add(text.slice(0, 80));
-
-    const snippet = $.html($el).slice(0, 1200);
-    cards.push(snippet);
+    cards.push($.html($el).slice(0, 3000));
   });
 
+  if (cards.length >= 2) {
+    console.log(`[parseGeneric] ${cards.length} cards via seletores CSS`);
+    return cards;
+  }
+
+  // Estratégia 2 (fallback): encontra o menor container DOM que contenha R$
+  // mas cujos filhos diretos NÃO contenham R$ — o "leaf" do preço = card.
+  // Funciona para qualquer estrutura de classes sem hardcode.
+  $("div, li, article, section").each((_, el) => {
+    const $el = $(el);
+    const text = $el.text().replace(/\s+/g, " ").trim();
+    if (!/R\$\s*[\d.,]+/.test(text)) return;
+    if ($el.find("a[href]").length === 0) return;
+
+    // Não é folha se algum filho direto também tem R$
+    let filhoTemPreco = false;
+    $el.children().each((_, child) => {
+      if (/R\$/.test($(child).text())) {
+        filhoTemPreco = true;
+        return false as unknown as void;
+      }
+    });
+    if (filhoTemPreco) return;
+
+    const key = text.slice(0, 80);
+    if (vistos.has(key)) return;
+    vistos.add(key);
+    cards.push($.html($el).slice(0, 3000));
+  });
+
+  console.log(`[parseGeneric] ${cards.length} cards via fallback R$-container`);
   return cards;
 }
 
@@ -218,7 +280,9 @@ async function parseLLMComCards(cards: string[], baseUrl: string): Promise<Imove
 Abaixo estão fragmentos HTML de cards de listagem do site ${baseUrl}.
 
 REGRAS:
-- urlAnuncio: URL absoluta do link individual do imóvel (ex: /imovel/123 → ${baseUrl}imovel/123). NUNCA use "${baseUrl}" sozinho
+- urlAnuncio: URL absoluta do link individual do imóvel — use EXATAMENTE o href encontrado no HTML do card (ex: href="/imovel/1296982/nome" → ${new URL(baseUrl).origin}/imovel/1296982/nome)
+- Se o href do card não existir ou for ambiguo, use null para urlAnuncio (NÃO invente URLs)
+- urlAnuncio: IGNORE links de CDN (cdn-cgi), Cloudflare challenge, rastreadores, login, contato, ou qualquer URL que não seja a página do imóvel
 - preco: apenas o número inteiro (450000, NÃO "R$ 450.000")
 - areaM2: apenas o número (120, NÃO "120 m²")
 - quartos/banheiros/vagas: apenas o número inteiro
@@ -230,14 +294,13 @@ ${cardsHtml}`,
       });
 
       const mapped = object.imoveis
-        .filter(
-          (item) =>
-            item.urlAnuncio &&
-            item.urlAnuncio !== baseUrl &&
-            item.urlAnuncio !== baseUrl.replace(/\/$/, "")
-        )
         .map((item) => ({
+          ...item,
           urlAnuncio: toAbsoluteUrl(item.urlAnuncio, baseUrl),
+        }))
+        .filter((item) => isUrlValida(item.urlAnuncio, baseUrl))
+        .map((item) => ({
+          urlAnuncio: item.urlAnuncio,
           titulo: item.titulo || null,
           tipo: item.tipo === "outro" ? null : (item.tipo || null),
           cidade: item.cidade || null,
@@ -262,11 +325,43 @@ ${cardsHtml}`,
 
 // ─── LLM com página completa ─────────────────────────────────────────────────
 
-async function parseLLMPaginaCompleta(html: string, baseUrl: string): Promise<ImovelInput[]> {
-  const $ = cheerio.load(html);
-  $("script, style, nav, footer, header, svg, noscript").remove();
-  const reducedHtml = $.html().slice(0, 18_000);
+const CHUNK_SIZE = 32_000;
 
+function normalizarHtmlParaLLM(html: string): string {
+  const $ = cheerio.load(html);
+  // Remove scripts externos e inline JS (mas PRESERVA <script type="application/json">
+  // e scripts com __NEXT_DATA__ / __NUXT__ que contêm os dados dos imóveis)
+  $("script").each((_, el) => {
+    const $el = $(el);
+    const type = ($el.attr("type") || "").toLowerCase();
+    const id = $el.attr("id") || "";
+    const content = $el.html() || "";
+    const isDataIsland =
+      type === "application/json" ||
+      type === "application/ld+json" ||
+      id === "__NEXT_DATA__" ||
+      content.includes("__NUXT__");
+    if (!isDataIsland) $el.remove();
+  });
+  $("style, nav, footer, header, svg, noscript, iframe, video, audio").remove();
+  // Remove atributos prolixos
+  $("[style]").removeAttr("style");
+  $("*").each((_, el) => {
+    const attrs = Object.keys(("attribs" in el ? el.attribs : null) || {});
+    attrs.forEach((attr) => {
+      if (attr.startsWith("data-v-") || attr === "data-reactid" || attr === "data-gatsby")
+        $(el).removeAttr(attr);
+    });
+  });
+  // Remove data: URIs das imagens
+  $("img").each((_, el) => {
+    const src = $(el).attr("src") || "";
+    if (src.startsWith("data:")) $(el).removeAttr("src");
+  });
+  return $.html();
+}
+
+async function parseLLMChunk(chunk: string, baseUrl: string): Promise<ImovelInput[]> {
   try {
     const { object } = await generateObject({
       model: openai("gpt-4o-mini"),
@@ -275,19 +370,25 @@ async function parseLLMPaginaCompleta(html: string, baseUrl: string): Promise<Im
 Analise o HTML abaixo e extraia TODOS os imóveis listados na página do site ${baseUrl}.
 
 REGRAS:
-- urlAnuncio: URL absoluta do link individual (NUNCA "${baseUrl}" sozinho)
+- urlAnuncio: use EXATAMENTE o href do link do imóvel encontrado no HTML — NÃO invente URLs nem use "${baseUrl}" sozinho
+- urlAnuncio: IGNORE cdn-cgi, Cloudflare challenge, rastreadores, login, contato; se não encontrar URL real use null
 - preco: apenas o número inteiro (450000, NÃO "R$ 450.000")
 - areaM2: apenas o número em m²
+- Se os dados estiverem em JSON (ex: __NEXT_DATA__), extraia desses campos JSON
 - Omita campos não encontrados
 
 HTML:
-${reducedHtml}`,
+${chunk}`,
     });
 
     return object.imoveis
-      .filter((item) => item.urlAnuncio && item.urlAnuncio !== baseUrl)
       .map((item) => ({
+        ...item,
         urlAnuncio: toAbsoluteUrl(item.urlAnuncio, baseUrl),
+      }))
+      .filter((item) => isUrlValida(item.urlAnuncio, baseUrl))
+      .map((item) => ({
+        urlAnuncio: item.urlAnuncio,
         titulo: item.titulo || null,
         tipo: item.tipo === "outro" ? null : (item.tipo || null),
         cidade: item.cidade || null,
@@ -301,9 +402,39 @@ ${reducedHtml}`,
         imagens: (item.imagens || []).slice(0, 5),
       }));
   } catch (err) {
-    console.error("[parseLLM] Falha na extração da página completa:", err);
+    console.error("[parseLLM] Falha no chunk:", err);
     return [];
   }
+}
+
+async function parseLLMPaginaCompleta(html: string, baseUrl: string): Promise<ImovelInput[]> {
+  const cleanHtml = normalizarHtmlParaLLM(html);
+  console.log(`[parseLLM] HTML limpo: ${cleanHtml.length} chars`);
+
+  // Se cabe num chunk só, faz uma chamada
+  if (cleanHtml.length <= CHUNK_SIZE) {
+    return parseLLMChunk(cleanHtml, baseUrl);
+  }
+
+  // Divide em chunks quebrando em tag-boundary (próximo \n ou </) sem cortar tags
+  const chunks: string[] = [];
+  let pos = 0;
+  while (pos < cleanHtml.length) {
+    let end = Math.min(pos + CHUNK_SIZE, cleanHtml.length);
+    // Recua até a próxima quebra de tag para não cortar no meio
+    if (end < cleanHtml.length) {
+      const tagBreak = cleanHtml.lastIndexOf("</", end);
+      if (tagBreak > pos) end = tagBreak;
+    }
+    chunks.push(cleanHtml.slice(pos, end));
+    pos = end;
+  }
+
+  console.log(`[parseLLM] HTML grande (${cleanHtml.length} chars) → ${chunks.length} chunks em paralelo`);
+
+  const resultsPorChunk = await Promise.all(chunks.map((c) => parseLLMChunk(c, baseUrl)));
+  const todos = resultsPorChunk.flat();
+  return Array.from(new Map(todos.map((i) => [i.urlAnuncio, i])).values());
 }
 
 
