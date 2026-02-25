@@ -1,34 +1,38 @@
 import Link from "next/link";
-import {
-  Home,
-  Link2,
-  Clock,
-  Heart,
-  Search,
-} from "lucide-react";
+import { Home, Link2, Clock, Heart, Search } from "lucide-react";
+import { auth } from "@/auth";
+import { getStats, getSearches, getFontesComContagem } from "@/lib/db/queries";
 
-const recentSearches = [
-  { query: "apartamento 2 quartos perto do parque moinhos", results: 42, date: "Hoje 14:32" },
-  { query: "casa com terreno amplo até R$600k zona sul", results: 18, date: "Hoje 11:05" },
-  { query: "studio ou loft próximo à PUCRS", results: 27, date: "Ontem" },
-  { query: "kitnet aluguel bairro Floresta até R$1.500", results: 9, date: "22/02" },
-];
+function formatDate(date: Date) {
+  const now = new Date();
+  const diff = now.getTime() - date.getTime();
+  const hours = Math.floor(diff / (1000 * 60 * 60));
+  if (hours < 24)
+    return `Hoje ${date.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
+  if (hours < 48) return "Ontem";
+  return date.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
+}
 
-const fontesStatus = [
-  { url: "imobhorizonte.com.br", imoveis: 523, status: "ok" },
-  { url: "casasul.imob.com.br", imoveis: 318, status: "ok" },
-  { url: "imovelprime.com.br", imoveis: 0, status: "erro", detail: "Erro 403" },
-  { url: "realtysul.com.br", imoveis: 142, status: "ok" },
-  { url: "novacasa.imob.br", imoveis: 0, status: "sync", detail: "Sincronizando" },
-];
+export default async function DashboardPage() {
+  const session = await auth();
+  const userId = session!.user!.id!;
+  const firstName = (session!.user!.name ?? session!.user!.email ?? "Usuário").split(" ")[0];
 
-export default function DashboardPage() {
+  const [stats, searches, fontes] = await Promise.all([
+    getStats(userId),
+    getSearches(userId),
+    getFontesComContagem(),
+  ]);
+
+  const recentSearches = searches.slice(0, 4);
+  const fontesStatus = fontes.slice(0, 5);
+
   return (
     <>
       <div className="topbar">
         <div>
           <div className="topbar-title">Dashboard</div>
-          <div className="topbar-sub">Bem-vindo de volta, Mateus</div>
+          <div className="topbar-sub">Bem-vindo de volta, {firstName}</div>
         </div>
         <div className="topbar-actions">
           <Link href="/buscador" className="btn btn-primary">
@@ -47,8 +51,7 @@ export default function DashboardPage() {
             </div>
             <div>
               <div className="stat-label">Imóveis indexados</div>
-              <div className="stat-value">1.847</div>
-              <div className="stat-delta positive">+124 esta semana</div>
+              <div className="stat-value">{stats.imoveis.toLocaleString("pt-BR")}</div>
             </div>
           </div>
           <div className="stat-card">
@@ -57,8 +60,12 @@ export default function DashboardPage() {
             </div>
             <div>
               <div className="stat-label">Fontes ativas</div>
-              <div className="stat-value">5</div>
-              <div className="stat-delta" style={{ color: "#dc2626" }}>3 com erro</div>
+              <div className="stat-value">{stats.fontes}</div>
+              {stats.fontesErro > 0 && (
+                <div className="stat-delta" style={{ color: "#dc2626" }}>
+                  {stats.fontesErro} com erro
+                </div>
+              )}
             </div>
           </div>
           <div className="stat-card">
@@ -67,8 +74,7 @@ export default function DashboardPage() {
             </div>
             <div>
               <div className="stat-label">Buscas realizadas</div>
-              <div className="stat-value">38</div>
-              <div className="stat-delta positive">+8 hoje</div>
+              <div className="stat-value">{stats.searches}</div>
             </div>
           </div>
           <div className="stat-card">
@@ -77,8 +83,7 @@ export default function DashboardPage() {
             </div>
             <div>
               <div className="stat-label">Favoritos salvos</div>
-              <div className="stat-value">12</div>
-              <div className="stat-delta">2 novos resultados</div>
+              <div className="stat-value">{stats.favoritos}</div>
             </div>
           </div>
         </div>
@@ -93,34 +98,50 @@ export default function DashboardPage() {
                 Ver todas
               </Link>
             </div>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Consulta</th>
-                    <th>Resultados</th>
-                    <th>Data</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recentSearches.map((s, i) => (
-                    <tr key={i}>
-                      <td style={{ maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {s.query}
-                      </td>
-                      <td>
-                        <span className="badge badge-blue">{s.results}</span>
-                      </td>
-                      <td style={{ color: "var(--text-3)", fontSize: 12 }}>{s.date}</td>
-                      <td>
-                        <button className="btn btn-ghost btn-sm">Abrir</button>
-                      </td>
+            {recentSearches.length === 0 ? (
+              <div style={{ padding: "24px 0", textAlign: "center", color: "var(--text-3)", fontSize: "13px" }}>
+                Nenhuma busca realizada ainda.{" "}
+                <Link href="/buscador" style={{ color: "var(--primary)" }}>
+                  Fazer a primeira busca →
+                </Link>
+              </div>
+            ) : (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Consulta</th>
+                      <th>Data</th>
+                      <th></th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {recentSearches.map((s) => (
+                      <tr key={s.id}>
+                        <td
+                          style={{
+                            maxWidth: 320,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {s.titulo ?? "Busca sem título"}
+                        </td>
+                        <td style={{ color: "var(--text-3)", fontSize: 12 }}>
+                          {formatDate(new Date(s.createdAt))}
+                        </td>
+                        <td>
+                          <Link href="/buscador" className="btn btn-ghost btn-sm">
+                            Repetir
+                          </Link>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
 
           {/* Right column */}
@@ -133,30 +154,53 @@ export default function DashboardPage() {
                   Gerenciar
                 </Link>
               </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                {fontesStatus.map((f, i) => (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: "10px", fontSize: "13px" }}>
-                    <span
-                      className={`dot ${f.status === "ok" ? "dot-green" : f.status === "erro" ? "dot-red" : "dot-gray"}`}
-                    />
-                    <span style={{ flex: 1, color: f.status === "sync" ? "var(--text-3)" : "var(--text-2)" }}>
-                      {f.url}
-                    </span>
-                    <span style={{ fontSize: "11.5px", color: "var(--text-3)" }}>
-                      {f.status === "ok" ? `${f.imoveis} imóveis` : f.detail}
-                    </span>
-                  </div>
-                ))}
-              </div>
+              {fontesStatus.length === 0 ? (
+                <div style={{ fontSize: "12.5px", color: "var(--text-3)" }}>
+                  Nenhuma fonte cadastrada.{" "}
+                  <Link href="/fontes/nova" style={{ color: "var(--primary)" }}>
+                    Adicionar →
+                  </Link>
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                  {fontesStatus.map((f) => (
+                    <div
+                      key={f.id}
+                      style={{ display: "flex", alignItems: "center", gap: "10px", fontSize: "13px" }}
+                    >
+                      <span
+                        className={`dot ${
+                          f.status === "ok"
+                            ? "dot-green"
+                            : f.status === "erro"
+                            ? "dot-red"
+                            : "dot-gray"
+                        }`}
+                      />
+                      <span style={{ flex: 1, color: f.status === "sync" ? "var(--text-3)" : "var(--text-2)" }}>
+                        {f.url}
+                      </span>
+                      <span style={{ fontSize: "11.5px", color: "var(--text-3)" }}>
+                        {f.status === "ok"
+                          ? `${f.totalImoveis} imóveis`
+                          : f.crawlErro ?? f.status}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Upgrade card */}
-            <div className="card" style={{ background: "linear-gradient(135deg,rgba(37,99,235,0.06),rgba(29,78,216,0.04))" }}>
+            <div
+              className="card"
+              style={{ background: "linear-gradient(135deg,rgba(37,99,235,0.06),rgba(29,78,216,0.04))" }}
+            >
               <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text)", marginBottom: "4px" }}>
                 Upgrade para Pro
               </div>
               <div style={{ fontSize: "12.5px", color: "var(--text-2)", marginBottom: "14px", lineHeight: 1.5 }}>
-                Suas buscas de IA chegaram a 6/10 hoje. O plano Pro oferece 100 buscas/dia.
+                O plano Pro oferece 100 buscas de IA por dia e fontes ilimitadas.
               </div>
               <Link
                 href="/configuracoes/plano"

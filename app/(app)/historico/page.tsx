@@ -1,45 +1,22 @@
 import Link from "next/link";
 import { Search, Clock, ArrowRight } from "lucide-react";
+import { auth } from "@/auth";
+import { getSearches } from "@/lib/db/queries";
 
-const historico = [
-  {
-    id: "1",
-    query: "apartamento 2 quartos perto do parque moinhos",
-    filtros: { tipo: "Apartamento", quartos: 2, cidade: "Porto Alegre" },
-    resultados: 42,
-    data: "Hoje às 14:32",
-  },
-  {
-    id: "2",
-    query: "casa com terreno amplo até R$600k zona sul",
-    filtros: { tipo: "Casa", precoMax: 600000, cidade: "Porto Alegre" },
-    resultados: 18,
-    data: "Hoje às 11:05",
-  },
-  {
-    id: "3",
-    query: "studio ou loft próximo à PUCRS",
-    filtros: { tipo: "Apartamento", cidade: "Porto Alegre" },
-    resultados: 27,
-    data: "Ontem às 16:20",
-  },
-  {
-    id: "4",
-    query: "kitnet aluguel bairro Floresta até R$1.500",
-    filtros: { tipo: "Apartamento", cidade: "Porto Alegre", precoMax: 1500 },
-    resultados: 9,
-    data: "22/02 às 09:15",
-  },
-  {
-    id: "5",
-    query: "apartamento 3 dormitórios com suíte em Caxias do Sul",
-    filtros: { tipo: "Apartamento", quartos: 3, cidade: "Caxias do Sul" },
-    resultados: 15,
-    data: "21/02 às 14:00",
-  },
-];
+function formatDate(date: Date) {
+  const now = new Date();
+  const hours = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60));
+  const time = date.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  if (hours < 24) return `Hoje às ${time}`;
+  if (hours < 48) return `Ontem às ${time}`;
+  return `${date.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })} às ${time}`;
+}
 
-export default function HistoricoPage() {
+export default async function HistoricoPage() {
+  const session = await auth();
+  const userId = session!.user!.id!;
+  const historico = await getSearches(userId);
+
   return (
     <>
       <div className="topbar">
@@ -64,54 +41,63 @@ export default function HistoricoPage() {
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-            {historico.map((item) => (
-              <div key={item.id} className="card" style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+            {historico.map((item) => {
+              const filtros = (item.filtros as Record<string, unknown> | null) ?? {};
+              return (
                 <div
-                  style={{
-                    width: "36px",
-                    height: "36px",
-                    borderRadius: "9px",
-                    background: "var(--primary-light)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    flexShrink: 0,
-                  }}
+                  key={item.id}
+                  className="card"
+                  style={{ display: "flex", alignItems: "center", gap: "16px" }}
                 >
-                  <Search size={15} style={{ color: "var(--primary)" }} />
-                </div>
-
-                <div style={{ flex: 1, minWidth: 0 }}>
                   <div
                     style={{
-                      fontSize: "13.5px",
-                      fontWeight: 600,
-                      color: "var(--text)",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                      marginBottom: "4px",
+                      width: "36px",
+                      height: "36px",
+                      borderRadius: "9px",
+                      background: "var(--primary-light)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexShrink: 0,
                     }}
                   >
-                    {item.query}
+                    <Search size={15} style={{ color: "var(--primary)" }} />
                   </div>
-                  <div style={{ display: "flex", gap: "12px", fontSize: "12px", color: "var(--text-3)" }}>
-                    <span>
-                      <Clock size={11} style={{ display: "inline", marginRight: "3px", verticalAlign: "middle" }} />
-                      {item.data}
-                    </span>
-                    <span className="badge badge-blue">{item.resultados} resultados</span>
-                    {item.filtros.tipo && <span>{item.filtros.tipo}</span>}
-                    {item.filtros.cidade && <span>{item.filtros.cidade}</span>}
-                  </div>
-                </div>
 
-                <Link href={`/buscador`} className="btn btn-ghost btn-sm">
-                  Repetir
-                  <ArrowRight size={13} />
-                </Link>
-              </div>
-            ))}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontSize: "13.5px",
+                        fontWeight: 600,
+                        color: "var(--text)",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        marginBottom: "4px",
+                      }}
+                    >
+                      {item.titulo ?? "Busca sem título"}
+                    </div>
+                    <div style={{ display: "flex", gap: "12px", fontSize: "12px", color: "var(--text-3)" }}>
+                      <span>
+                        <Clock
+                          size={11}
+                          style={{ display: "inline", marginRight: "3px", verticalAlign: "middle" }}
+                        />
+                        {formatDate(new Date(item.createdAt))}
+                      </span>
+                      {!!filtros.tipo && <span>{String(filtros.tipo)}</span>}
+                      {!!filtros.cidade && <span>{String(filtros.cidade)}</span>}
+                    </div>
+                  </div>
+
+                  <Link href="/buscador" className="btn btn-ghost btn-sm">
+                    Repetir
+                    <ArrowRight size={13} />
+                  </Link>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>

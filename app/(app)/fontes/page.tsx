@@ -1,45 +1,6 @@
 import Link from "next/link";
 import { Plus, RefreshCw, AlertTriangle } from "lucide-react";
-
-// Dados mockados — serão substituídos por dados reais do banco
-const fontes = [
-  {
-    id: "1",
-    url: "imobhorizonte.com.br",
-    nome: "Imob Horizonte",
-    imoveis: 523,
-    lastSync: "hoje 14:20",
-    status: "ok" as const,
-    erros: 8,
-  },
-  {
-    id: "2",
-    url: "casasul.imob.com.br",
-    nome: "Casa Sul",
-    imoveis: 318,
-    lastSync: "hoje 13:55",
-    status: "ok" as const,
-    erros: 2,
-  },
-  {
-    id: "3",
-    url: "imovelprime.com.br",
-    nome: "Imóvel Prime",
-    imoveis: 0,
-    lastSync: "hoje 12:00",
-    status: "erro" as const,
-    detail: "Erro 403 — Acesso negado",
-  },
-  {
-    id: "4",
-    url: "realtysul.com.br",
-    nome: "Realty Sul",
-    imoveis: 142,
-    lastSync: "hoje 11:30",
-    status: "ok" as const,
-    erros: 0,
-  },
-];
+import { getFontesComContagem } from "@/lib/db/queries";
 
 const statusLabel: Record<string, { label: string; badge: string; dot: string }> = {
   ok: { label: "Ativo", badge: "badge-success", dot: "dot-green" },
@@ -48,7 +9,18 @@ const statusLabel: Record<string, { label: string; badge: string; dot: string }>
   pendente: { label: "Pendente", badge: "badge-gray", dot: "dot-gray" },
 };
 
-export default function FontesPage() {
+function formatLastCrawl(date: Date | null) {
+  if (!date) return "Nunca sincronizado";
+  const now = new Date();
+  const hours = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60));
+  if (hours < 24)
+    return `hoje ${date.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
+  if (hours < 48) return "ontem";
+  return date.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
+}
+
+export default async function FontesPage() {
+  const fontes = await getFontesComContagem();
   const errosCount = fontes.filter((f) => f.status === "erro").length;
 
   return (
@@ -71,14 +43,18 @@ export default function FontesPage() {
           <div className="alert alert-warning">
             <AlertTriangle size={16} />
             <div>
-              <strong>{errosCount} fonte{errosCount > 1 ? "s" : ""} com erro</strong> — Verifique as URLs ou tente sincronizar novamente.
+              <strong>
+                {errosCount} fonte{errosCount > 1 ? "s" : ""} com erro
+              </strong>{" "}
+              — Verifique as URLs ou tente sincronizar novamente.
             </div>
           </div>
         )}
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "14px" }}>
           {fontes.map((fonte) => {
-            const s = statusLabel[fonte.status];
+            const s = statusLabel[fonte.status] ?? statusLabel.pendente;
+            const lastCrawlDate = fonte.lastCrawl ? new Date(fonte.lastCrawl) : null;
             return (
               <div
                 key={fonte.id}
@@ -101,26 +77,43 @@ export default function FontesPage() {
                         color: fonte.status === "erro" ? "var(--danger)" : "var(--text-3)",
                       }}
                     >
-                      {fonte.status === "erro" ? fonte.detail : `Última sinc: ${fonte.lastSync}`}
+                      {fonte.status === "erro"
+                        ? (fonte.crawlErro ?? "Erro desconhecido")
+                        : `Última sinc: ${formatLastCrawl(lastCrawlDate)}`}
                     </div>
                   </div>
                   <span className={`badge ${s.badge}`}>{s.label}</span>
                 </div>
 
-                <div style={{ display: "flex", gap: "16px", fontSize: "12.5px", color: "var(--text-3)", marginBottom: "14px" }}>
-                  {fonte.status !== "erro" && <span>{fonte.imoveis} imóveis</span>}
-                  {fonte.erros != null && fonte.erros > 0 && <span>{fonte.erros} erros ignorados</span>}
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "16px",
+                    fontSize: "12.5px",
+                    color: "var(--text-3)",
+                    marginBottom: "14px",
+                  }}
+                >
+                  {fonte.status !== "erro" && <span>{fonte.totalImoveis} imóveis</span>}
                   {fonte.status === "erro" && (
-                    <span>Última tentativa: {fonte.lastSync} — 0 imóveis</span>
+                    <span>
+                      Última tentativa: {formatLastCrawl(lastCrawlDate)} — 0 imóveis
+                    </span>
                   )}
                 </div>
 
                 <div style={{ display: "flex", gap: "8px" }}>
-                  <button className="btn btn-ghost btn-sm" style={{ flex: 1, justifyContent: "center" }}>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    style={{ flex: 1, justifyContent: "center" }}
+                  >
                     <RefreshCw size={13} />
                     {fonte.status === "erro" ? "Tentar novamente" : "Sincronizar"}
                   </button>
-                  <button className="btn btn-ghost btn-sm" style={{ flex: 1, justifyContent: "center" }}>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    style={{ flex: 1, justifyContent: "center" }}
+                  >
                     {fonte.status === "erro" ? "Editar URL" : "Configurar"}
                   </button>
                 </div>

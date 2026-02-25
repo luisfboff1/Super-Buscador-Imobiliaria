@@ -1,50 +1,26 @@
 import Link from "next/link";
 import { Heart, ExternalLink, Home, Bath, Car, Maximize2, MapPin, Search } from "lucide-react";
+import { auth } from "@/auth";
+import { getFavoritos } from "@/lib/db/queries";
 
-const favoritos = [
-  {
-    id: "1",
-    titulo: "Apartamento moderno no centro",
-    tipo: "Apartamento",
-    preco: 320000,
-    bairro: "Centro",
-    cidade: "Caxias do Sul",
-    area: 68,
-    quartos: 2,
-    banheiros: 1,
-    vagas: 1,
-    fonte: "imobhorizonte.com.br",
-    nota: "Visitar no fim de semana",
-    savedAt: "Hoje às 15:20",
-  },
-  {
-    id: "2",
-    titulo: "Casa espaçosa com jardim",
-    tipo: "Casa",
-    preco: 580000,
-    bairro: "Santa Lúcia",
-    cidade: "Caxias do Sul",
-    area: 180,
-    quartos: 3,
-    banheiros: 2,
-    vagas: 2,
-    fonte: "casasul.imob.com.br",
-    nota: "",
-    savedAt: "Ontem",
-  },
-];
-
-function formatPreco(v: number) {
-  return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
+function formatPreco(v: string | null) {
+  if (!v) return "Preço não informado";
+  const num = parseFloat(v);
+  if (isNaN(num)) return v;
+  return num.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
 }
 
-export default function FavoritosPage() {
+export default async function FavoritosPage() {
+  const session = await auth();
+  const userId = session!.user!.id!;
+  const favoritos = await getFavoritos(userId);
+
   return (
     <>
       <div className="topbar">
         <div>
           <div className="topbar-title">Favoritos</div>
-          <div className="topbar-sub">{favoritos.length} imóveis salvos</div>
+          <div className="topbar-sub">{favoritos.length} imóvel{favoritos.length !== 1 ? "is" : ""} salvo{favoritos.length !== 1 ? "s" : ""}</div>
         </div>
       </div>
 
@@ -63,35 +39,58 @@ export default function FavoritosPage() {
           </div>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "14px" }}>
-            {favoritos.map((imovel) => (
-              <div key={imovel.id} className="imovel-card">
+            {favoritos.map((fav) => (
+              <div key={fav.id} className="imovel-card">
                 <div className="imovel-img">
                   <Home size={36} style={{ color: "#8fa3c0", strokeWidth: 1.25 }} />
                 </div>
                 <div className="imovel-body">
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "8px" }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "flex-start",
+                      gap: "8px",
+                    }}
+                  >
                     <div>
-                      <div className="imovel-price">{formatPreco(imovel.preco)}</div>
+                      <div className="imovel-price">{formatPreco(fav.imovel.preco)}</div>
                       <div className="imovel-address">
                         <MapPin size={11} />
-                        {imovel.bairro}, {imovel.cidade}
+                        {fav.imovel.bairro ?? "—"}, {fav.imovel.cidade ?? "—"}
                       </div>
                     </div>
                     <Heart size={15} fill="currentColor" style={{ color: "#dc2626", flexShrink: 0 }} />
                   </div>
 
                   <div className="imovel-stats">
-                    {imovel.quartos > 0 && (
-                      <span className="imovel-stat"><Home size={12} />{imovel.quartos} qts</span>
+                    {fav.imovel.quartos != null && fav.imovel.quartos > 0 && (
+                      <span className="imovel-stat">
+                        <Home size={12} />
+                        {fav.imovel.quartos} qts
+                      </span>
                     )}
-                    <span className="imovel-stat"><Bath size={12} />{imovel.banheiros} ban</span>
-                    {imovel.vagas > 0 && (
-                      <span className="imovel-stat"><Car size={12} />{imovel.vagas} vaga{imovel.vagas > 1 ? "s" : ""}</span>
+                    {fav.imovel.banheiros != null && (
+                      <span className="imovel-stat">
+                        <Bath size={12} />
+                        {fav.imovel.banheiros} ban
+                      </span>
                     )}
-                    <span className="imovel-stat"><Maximize2 size={12} />{imovel.area}m²</span>
+                    {fav.imovel.vagas != null && fav.imovel.vagas > 0 && (
+                      <span className="imovel-stat">
+                        <Car size={12} />
+                        {fav.imovel.vagas} vaga{fav.imovel.vagas > 1 ? "s" : ""}
+                      </span>
+                    )}
+                    {fav.imovel.areaM2 && (
+                      <span className="imovel-stat">
+                        <Maximize2 size={12} />
+                        {fav.imovel.areaM2}m²
+                      </span>
+                    )}
                   </div>
 
-                  {imovel.nota && (
+                  {fav.nota && (
                     <div
                       style={{
                         marginTop: "8px",
@@ -102,16 +101,23 @@ export default function FavoritosPage() {
                         color: "var(--warning)",
                       }}
                     >
-                      📝 {imovel.nota}
+                      📝 {fav.nota}
                     </div>
                   )}
 
                   <div className="imovel-fonte">
-                    <span>{imovel.fonte}</span>
-                    <a href="#" target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm">
-                      <ExternalLink size={11} />
-                      Ver anúncio
-                    </a>
+                    <span>{fav.fonteUrl ?? "Fonte desconhecida"}</span>
+                    {fav.imovel.urlAnuncio && (
+                      <a
+                        href={fav.imovel.urlAnuncio}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="btn btn-ghost btn-sm"
+                      >
+                        <ExternalLink size={11} />
+                        Ver anúncio
+                      </a>
+                    )}
                   </div>
                 </div>
               </div>

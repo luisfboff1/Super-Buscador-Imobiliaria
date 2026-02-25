@@ -15,106 +15,19 @@ import {
 
 type Imovel = {
   id: string;
-  titulo: string;
-  tipo: string;
-  preco: number;
-  bairro: string;
-  cidade: string;
-  area: number;
-  quartos: number;
-  banheiros: number;
-  vagas: number;
-  fonte: string;
-  urlAnuncio: string;
+  titulo: string | null;
+  tipo: string | null;
+  preco: string | null;
+  bairro: string | null;
+  cidade: string | null;
+  areaM2: string | null;
+  quartos: number | null;
+  banheiros: number | null;
+  vagas: number | null;
+  urlAnuncio: string | null;
+  fonteNome: string | null;
+  fonteUrl: string | null;
 };
-
-// Mock data para demonstração
-const imoveisMock: Imovel[] = [
-  {
-    id: "1",
-    titulo: "Apartamento moderno no centro",
-    tipo: "Apartamento",
-    preco: 320000,
-    bairro: "Centro",
-    cidade: "Caxias do Sul",
-    area: 68,
-    quartos: 2,
-    banheiros: 1,
-    vagas: 1,
-    fonte: "imobhorizonte.com.br",
-    urlAnuncio: "#",
-  },
-  {
-    id: "2",
-    titulo: "Casa espaçosa com jardim",
-    tipo: "Casa",
-    preco: 580000,
-    bairro: "Santa Lúcia",
-    cidade: "Caxias do Sul",
-    area: 180,
-    quartos: 3,
-    banheiros: 2,
-    vagas: 2,
-    fonte: "casasul.imob.com.br",
-    urlAnuncio: "#",
-  },
-  {
-    id: "3",
-    titulo: "Apartamento 3 dormitórios com suíte",
-    tipo: "Apartamento",
-    preco: 450000,
-    bairro: "Rio Branco",
-    cidade: "Caxias do Sul",
-    area: 95,
-    quartos: 3,
-    banheiros: 2,
-    vagas: 2,
-    fonte: "realtysul.com.br",
-    urlAnuncio: "#",
-  },
-  {
-    id: "4",
-    titulo: "Studio compacto próximo à universidade",
-    tipo: "Apartamento",
-    preco: 180000,
-    bairro: "Universitário",
-    cidade: "Caxias do Sul",
-    area: 32,
-    quartos: 1,
-    banheiros: 1,
-    vagas: 0,
-    fonte: "imobhorizonte.com.br",
-    urlAnuncio: "#",
-  },
-  {
-    id: "5",
-    titulo: "Casa nova em condomínio fechado",
-    tipo: "Casa",
-    preco: 720000,
-    bairro: "Desvio Rizzo",
-    cidade: "Caxias do Sul",
-    area: 220,
-    quartos: 4,
-    banheiros: 3,
-    vagas: 3,
-    fonte: "casasul.imob.com.br",
-    urlAnuncio: "#",
-  },
-  {
-    id: "6",
-    titulo: "Sala comercial no centro",
-    tipo: "Comercial",
-    preco: 280000,
-    bairro: "Centro",
-    cidade: "Caxias do Sul",
-    area: 55,
-    quartos: 0,
-    banheiros: 1,
-    vagas: 1,
-    fonte: "realtysul.com.br",
-    urlAnuncio: "#",
-  },
-];
 
 type Filtros = {
   tipo: string;
@@ -124,63 +37,94 @@ type Filtros = {
   areaMin: string;
 };
 
-function formatPreco(v: number) {
-  return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
+function formatPreco(v: string | null) {
+  if (!v) return "Preço não informado";
+  const num = parseFloat(v);
+  if (isNaN(num)) return v;
+  return num.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
 }
 
-function ImovelCard({ imovel, favorito, onFavorito }: { imovel: Imovel; favorito: boolean; onFavorito: () => void }) {
+function ImovelCard({
+  imovel,
+  favorito,
+  onFavorito,
+}: {
+  imovel: Imovel;
+  favorito: boolean;
+  onFavorito: () => void;
+}) {
   return (
     <div className="imovel-card">
       <div className="imovel-img">
         <Home size={36} style={{ color: "#8fa3c0", strokeWidth: 1.25 }} />
       </div>
       <div className="imovel-body">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "8px" }}>
+        <div
+          style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "8px" }}
+        >
           <div>
             <div className="imovel-price">{formatPreco(imovel.preco)}</div>
             <div className="imovel-address">
               <MapPin size={11} />
-              {imovel.bairro}, {imovel.cidade}
+              {imovel.bairro ?? "—"}, {imovel.cidade ?? "—"}
             </div>
           </div>
           <button
             className="btn btn-ghost btn-icon"
-            onClick={(e) => { e.stopPropagation(); onFavorito(); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onFavorito();
+            }}
             title="Favoritar"
           >
-            <Heart size={15} fill={favorito ? "currentColor" : "none"} style={{ color: favorito ? "#dc2626" : undefined }} />
+            <Heart
+              size={15}
+              fill={favorito ? "currentColor" : "none"}
+              style={{ color: favorito ? "#dc2626" : undefined }}
+            />
           </button>
         </div>
 
         <div className="imovel-stats">
-          {imovel.quartos > 0 && (
+          {imovel.quartos != null && imovel.quartos > 0 && (
             <span className="imovel-stat">
               <Home size={12} />
               {imovel.quartos} qts
             </span>
           )}
-          <span className="imovel-stat">
-            <Bath size={12} />
-            {imovel.banheiros} ban
-          </span>
-          {imovel.vagas > 0 && (
+          {imovel.banheiros != null && (
+            <span className="imovel-stat">
+              <Bath size={12} />
+              {imovel.banheiros} ban
+            </span>
+          )}
+          {imovel.vagas != null && imovel.vagas > 0 && (
             <span className="imovel-stat">
               <Car size={12} />
               {imovel.vagas} vaga{imovel.vagas > 1 ? "s" : ""}
             </span>
           )}
-          <span className="imovel-stat">
-            <Maximize2 size={12} />
-            {imovel.area}m²
-          </span>
+          {imovel.areaM2 && (
+            <span className="imovel-stat">
+              <Maximize2 size={12} />
+              {imovel.areaM2}m²
+            </span>
+          )}
         </div>
 
         <div className="imovel-fonte">
-          <span>{imovel.fonte}</span>
-          <a href={imovel.urlAnuncio} target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm">
-            <ExternalLink size={11} />
-            Ver anúncio
-          </a>
+          <span>{imovel.fonteUrl ?? imovel.fonteNome ?? "Fonte desconhecida"}</span>
+          {imovel.urlAnuncio && (
+            <a
+              href={imovel.urlAnuncio}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn btn-ghost btn-sm"
+            >
+              <ExternalLink size={11} />
+              Ver anúncio
+            </a>
+          )}
         </div>
       </div>
     </div>
@@ -201,29 +145,41 @@ export default function BuscadorPage() {
   const [favoritos, setFavoritos] = useState<Set<string>>(new Set());
   const [showFiltros, setShowFiltros] = useState(false);
 
-  function toggleFavorito(id: string) {
+  async function toggleFavorito(id: string) {
     setFavoritos((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
+    await fetch("/api/favoritos", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ imovelId: id }),
+    });
   }
 
   async function handleBuscar(e: React.FormEvent) {
     e.preventDefault();
     setBuscando(true);
-    // TODO: chamar API /api/imoveis/search com os filtros
-    await new Promise((r) => setTimeout(r, 800));
-    // Filtrar mock
-    let results = imoveisMock;
-    if (filtros.tipo) results = results.filter((i) => i.tipo.toLowerCase() === filtros.tipo.toLowerCase());
-    if (filtros.cidade) results = results.filter((i) => i.cidade.toLowerCase().includes(filtros.cidade.toLowerCase()));
-    if (filtros.precoMax) results = results.filter((i) => i.preco <= Number(filtros.precoMax));
-    if (filtros.quartos) results = results.filter((i) => i.quartos >= Number(filtros.quartos));
-    if (filtros.areaMin) results = results.filter((i) => i.area >= Number(filtros.areaMin));
-    setResultado(results);
-    setBuscando(false);
+    try {
+      const params = new URLSearchParams();
+      if (filtros.tipo) params.set("tipo", filtros.tipo);
+      if (filtros.cidade) params.set("cidade", filtros.cidade);
+      if (filtros.precoMax) params.set("precoMax", filtros.precoMax);
+      if (filtros.quartos) params.set("quartosMin", filtros.quartos);
+      if (filtros.areaMin) params.set("areaMin", filtros.areaMin);
+      if (busca) params.set("q", busca);
+
+      const res = await fetch(`/api/imoveis?${params.toString()}`);
+      if (!res.ok) throw new Error("Erro ao buscar imóveis");
+      const data = await res.json();
+      setResultado(data.imoveis ?? []);
+    } catch {
+      setResultado([]);
+    } finally {
+      setBuscando(false);
+    }
   }
 
   return (
@@ -279,7 +235,9 @@ export default function BuscadorPage() {
               <div style={{ borderTop: "1px solid var(--border)", paddingTop: "16px" }}>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "12px" }}>
                   <div>
-                    <label className="form-label" style={{ marginBottom: "4px" }}>Tipo</label>
+                    <label className="form-label" style={{ marginBottom: "4px" }}>
+                      Tipo
+                    </label>
                     <select
                       className="form-input"
                       value={filtros.tipo}
@@ -293,7 +251,9 @@ export default function BuscadorPage() {
                     </select>
                   </div>
                   <div>
-                    <label className="form-label" style={{ marginBottom: "4px" }}>Cidade</label>
+                    <label className="form-label" style={{ marginBottom: "4px" }}>
+                      Cidade
+                    </label>
                     <input
                       className="form-input"
                       placeholder="Ex: Caxias do Sul"
@@ -302,7 +262,9 @@ export default function BuscadorPage() {
                     />
                   </div>
                   <div>
-                    <label className="form-label" style={{ marginBottom: "4px" }}>Preço máx.</label>
+                    <label className="form-label" style={{ marginBottom: "4px" }}>
+                      Preço máx.
+                    </label>
                     <input
                       className="form-input"
                       type="number"
@@ -312,7 +274,9 @@ export default function BuscadorPage() {
                     />
                   </div>
                   <div>
-                    <label className="form-label" style={{ marginBottom: "4px" }}>Quartos mín.</label>
+                    <label className="form-label" style={{ marginBottom: "4px" }}>
+                      Quartos mín.
+                    </label>
                     <select
                       className="form-input"
                       value={filtros.quartos}
@@ -326,7 +290,9 @@ export default function BuscadorPage() {
                     </select>
                   </div>
                   <div>
-                    <label className="form-label" style={{ marginBottom: "4px" }}>Área mín. (m²)</label>
+                    <label className="form-label" style={{ marginBottom: "4px" }}>
+                      Área mín. (m²)
+                    </label>
                     <input
                       className="form-input"
                       type="number"
@@ -348,7 +314,10 @@ export default function BuscadorPage() {
               <Search size={40} strokeWidth={1.25} />
             </div>
             <h3>Pronto para buscar</h3>
-            <p>Use os filtros acima ou descreva o imóvel que você procura. Buscaremos em todas as fontes cadastradas.</p>
+            <p>
+              Use os filtros acima ou descreva o imóvel que você procura. Buscaremos em todas as fontes
+              cadastradas.
+            </p>
           </div>
         ) : resultado.length === 0 ? (
           <div className="empty-state">
@@ -371,7 +340,10 @@ export default function BuscadorPage() {
               <div style={{ fontSize: "13.5px", color: "var(--text-2)" }}>
                 <strong style={{ color: "var(--text)" }}>{resultado.length}</strong> imóveis encontrados
               </div>
-              <select className="form-input" style={{ width: "auto", fontSize: "12.5px", padding: "6px 10px" }}>
+              <select
+                className="form-input"
+                style={{ width: "auto", fontSize: "12.5px", padding: "6px 10px" }}
+              >
                 <option>Mais relevante</option>
                 <option>Menor preço</option>
                 <option>Maior preço</option>
@@ -380,13 +352,7 @@ export default function BuscadorPage() {
               </select>
             </div>
 
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(3, 1fr)",
-                gap: "14px",
-              }}
-            >
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "14px" }}>
               {resultado.map((imovel) => (
                 <ImovelCard
                   key={imovel.id}
