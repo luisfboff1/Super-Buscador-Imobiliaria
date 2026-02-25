@@ -1,0 +1,128 @@
+# Meeting Transcription
+
+  Meeting started: 25/02/2026, 10:58:27
+  Duration: 17 minutes
+  Participants: Luis Fernando Boff, Mateus Rimoldi Facchin
+
+  [View original transcript](https://app.tactiq.io/api/2/u/m/r/s1sHJYpgXCz1vsxuPVaX?o=txt)
+
+    ## Summary and Action items
+
+### Quick summary ###
+
+During this meeting, Luis and Mateus discussed the requirements and scope for a real-estate search aggregator that crawls or ingests URLs from multiple real-estate agencies to allow searching across many listings from one interface. They covered filter UI options (pre-set boxes vs. natural language), hosting and domain choices, data sources (manual URL list, Excel import, or using CRECI data), token/payment handling for API usage, and next steps including a follow-up meeting on March 11 to review a prototype.
+
+### Action items for Luis ###
+
+- [ ] Desenvolver e apresentar um protótipo inicial do buscador (versão crua) até a próxima reunião em 11/03.
+- [ ] Definir a arquitetura básica: duas abas (importar URLs/Excel e buscador sobre o banco de dados) e como os filtros serão exibidos.
+- [ ] Decidir e providenciar hospedagem/domínio inicial (pode ser subdomínio temporário); sugerir nomes de domínio para o projeto.
+- [ ] Criar conta de API para uso compartilhado e cadastrar um cartão para cobrir os tokens iniciais (configurar cobrança inclusa no plano inicial).
+- [ ] Criar um grupo no WhatsApp para centralizar a comunicação do projeto.
+- [ ] Preparar uma lista de opções para como importar URLs (upload de Excel, inserção manual via interface, extração automática do CRECI) para validar com Mateus.
+
+### Action items for Mateus ###
+
+- [ ] Definir e propor possíveis nomes comerciais/domínios para o buscador até o encontro de 11/03.
+- [ ] Reunir ou indicar fontes de dados (lista de imobiliárias de Caxias do Sul e outras cidades; verificar disponibilidade de dados no CRECI) e decidir se fará a seleção manual ou fornecerá um banco de URLs/Excel.
+- [ ] Validar o modelo de negócio e a proposta de cobrança (mensalidade ou outro) e preparar considerações comerciais para a próxima reunião.
+- [ ] Informar referências visuais ou exemplos de interfaces que goste (se tiver) para orientar o design e identidade visual.
+- [ ] Colaborar com o planejamento de integração com a imobile (avaliação sobre evitar concorrência direta e possíveis sinergias de marketing).
+
+
+  
+
+  
+
+  ## Transcript
+
+  00:00 Luis Fernando Boff: Iotvq. Saiyaki. Mass. You are who keep that? I
+00:12 Mateus Rimoldi Facchin: No, no. I said be my bill is
+00:18 Luis Fernando Boff: Show car here in Don't forget African Sun is blicomize the poison from Pokemon
+00:24 Mateus Rimoldi Facchin: Saying.
+00:27 Luis Fernando Boff: as parts technicus. Now
+00:29 Mateus Rimoldi Facchin: Troll. that's because I mean to Know, your pegomizers are a surprise in the souls Aliki.
+00:46 Luis Fernando Boff: Hi everyone, this is an automated message to let you know my Tactiq extension: https://tactiq.io/r/transcribing is transcribing this meeting for me so I can give my full attention to you.
+00:47 Mateus Rimoldi Facchin: Get the first project now. You just remember. Well, I'm here my old dude in contrary societies. Yeah. Wow, you think you'll answer you think, you know, sites that the mobile Alice. Oh, you know. Well, she's presented or mobile. Second to vagus is Buscando. Horizontally, there's okay, Mobility into Juma Platformer Januzuki Khan, Então a minha melhor busca que eu tenho é fazer uma imobiliária Um Por exemplo em Caxias do Sul tem 200 imobiliárias, eu tenho que vasculhar 200 imobiliárias.
+01:32 Mateus Rimoldi Facchin: Para ver se eu tenho lá dentro o imóvel que eu busco, né? A ideia é fazer esse buscador. Onde eu consigo jogar essa URL dessas imobiliárias. Para dentro desse buscador e ali dentro desse buscador, eu aplico o filtro que eu preciso. Ele faz o filtro direto dessas 200 imobiliárias e Melissa o imóvel ali que eu tô buscando. eu não vou precisar visitar as 200 imobiliárias para encontrar o meu imóvel ali nesse buscador eu já Visito indiretamente essas 200 imobiliárias num lugar só né? Então é um super filtro, né? Vamos dizer assim.
+02:14 Luis Fernando Boff: Tá Ah já já pegando uma dúvida. Como que seria bom para ti ter essa interface de filtro seria um filtros no sentido de tu, vai lá e tu digita lá, eu quero um apartamento em tal tal ou que já tem um Campos para citados, por exemplo cidade tamanho número de quartos.
+02:36 Mateus Rimoldi Facchin: Aí o que que eu tô mais acostumado que é o perfil de de imobiliárias, né? Vamos dizer aos que já tem. Apartamento em Caxias quartos enfim, né? Existe?
+02:47 Luis Fernando Boff: Então acho que caixinhas pré-cetadas ficaram mais fáceis de tu mexer no dia a dia.
+02:51 Mateus Rimoldi Facchin: Não digo mais fáceis vão dizer que elas são mais usuais se tu tiver uma interação realmente como a eu busco apartamento assim assim assado e ela conseguisse entender e ler os anúncios das imobiliárias. Acho que seria mais legal ainda ou daqui a pouco tem os dois né, mas eu acho.
+03:11 Luis Fernando Boff: Para não porque porque se no fim a iaque vai vai pesquisar ela iria ler o filtro e a pesquisar de acordo com o filtro nada. Impede tu já falar para ela o que tu quer e a gente cortar o filtro, né? Que a gente pode fazer por exemplo. Eu quero tal tal tal e aí ela diz ó, eu entendi que tu quer isso e ela te dizendo a mensagem, tipo vou procurar apartamentos que sejam daí, já mostra os filtros naquele formato padrão, né? E aí tu aprova né? Digamos assim uma vez aprovado, ela vai lá e faz a varredura.
+03:40 Luis Fernando Boff: tá
+03:41 Mateus Rimoldi Facchin: Acredito que seja melhor acredito que seja até melhor isso. Aí vamos dizer no
+03:43 Luis Fernando Boff: tá Não, beleza.
+03:47 Mateus Rimoldi Facchin: meu caso na minha busca. OK? Vamos dizer pensando numa questão maior de aceitação de outros públicos, talvez acho que sim, né? Seria uma coisa nova, né, mas eu acho que é legal tem uma interação com a Iara e ela ainda grava
+03:58 Luis Fernando Boff: Tá tudo bem.
+04:03 Mateus Rimoldi Facchin: isso aí. Que fica mais top ainda né? Porque daí tu vai entrar de novo lá na plataforma lá olá, Mateus Victor voltou tu ainda busca tal coisa. Ah, eu queria mais isso e ela tem um banco de dados de informação tua.
+04:18 Luis Fernando Boff: Da conversa tá aí aí a gente tá falando também de login. Se tiver que ter
+04:19 Mateus Rimoldi Facchin: é
+04:25 Luis Fernando Boff: uma uma um histórico de conversa vai ter que ter login, né? E aí a gente entra também no ponto de onde que ela vai ficar hospedada em qual domínio? Eu queria criar um domínio para isso teria usar o domínio que hoje vocês têm o subdomínio, né? Vocês tu entende pouco como é que funciona isso?
+04:42 Mateus Rimoldi Facchin: Tendo mais ou menos sei que tem que ter os domínios ali, enfim, mas não.
+04:47 Luis Fernando Boff: porque hoje por exemplo, vocês tem o que tem o teu site que ele ia urbanizadora
+04:51 Mateus Rimoldi Facchin: Vitória eu tenho a imobile também, né? Que eu te comentei lá aquela vez que
+04:52 Luis Fernando Boff: e
+04:58 Mateus Rimoldi Facchin: ela também é esse buscador a diferença da immobile é que eu entro em contato com a imobiliária Imobiliária, aceita divulgar os imóveis dela dentro da minha plataforma e daí.
+05:11 Luis Fernando Boff: Sim nesse aí tu ia tá meio que sem pedir autorização e entrar no site porque tá público, né? No final das contas da público.
+05:19 Mateus Rimoldi Facchin: Exatamente exatamente
+05:21 Luis Fernando Boff: Tá tu pensa. Então a gente tem um domínio próprio só para isso, por exemplo
+05:22 Mateus Rimoldi Facchin: então
+05:27 Luis Fernando Boff: um buscador.com, sei lá.
+05:29 Mateus Rimoldi Facchin: Pode pode ser que sim pensando no negócio de divulgação em marketing sim, com
+05:35 Luis Fernando Boff: Tá então isso teria um custo, né? A gente teria que que comprar lida e esse
+05:35 Mateus Rimoldi Facchin: certeza. é
+05:40 Luis Fernando Boff: domínio e aí o Bom comprar o domínio já seria bom pensar o nome. Né que uma vez para mexer depois do domínio é mais caro, né? Então pelo
+05:49 Mateus Rimoldi Facchin: como que
+05:50 Luis Fernando Boff: menos o nome ali seria bom a gente ter cara isso assim, não precisa ser algo tão urgente. Eu consigo já fazendo sem isso. Aí vai ficar um domínio ali meio tipo. XR J2 46, né? Vai ficar um bagulho meio tipo. E aí depois a gente faz para validar não precisa mas é algo que eu vou deixar contigo então tu pensar essa parte de nome tá que tu quer dar ali um domínio tá? Então vai ficar contigo essa parte outra coisa ali das url que tu falou.
+06:24 Luis Fernando Boff: a gente Pode fazer de duas formas, né? A gente pode por exemplo dá para o site um excel já com esses links. Ou fazer que tu coloque esses links direto no site ou os dois, né? Tipo assim, você já tem um Excel faça o download do Excel com os links aqui. Ou adicione manualmente os links.
+06:48 Mateus Rimoldi Facchin: É o que que tem hoje, por exemplo existe o Creci, né? Que é o conselho dos corretores. Em cada cidade tem todos lá os corretores a imobiliária razão social, enfim que existe na cidade, mas não existe o link do site existe todas as imobiliárias. Dá para fazer essa busca manual, né? Daí teria que fazer essa busca manual cada site enfim encontrar todos os sites e todas imobiliárias em Caxias e jogar ali para dentro ou teria assim esse banco de dados de todas imobiliárias.
+07:25 Mateus Rimoldi Facchin: Que talvez teria que fazer uma busca direta, né? Não sei o que que daria para fazer obviamente seria muito mais fácil. Se eu acessasse o cresci pegar só o banco de dados de nome eu gaste para uma enfim e ela fazia a busca através do nome o site porque daí
+07:45 Luis Fernando Boff: Não dá para dá para ter duas abas.
+07:47 Mateus Rimoldi Facchin: Porque isso daí a gente consegue fazer esse buscador direto a nível Brasil. Porque se for mais manual com certeza vai demorar, né? Ah vou ter que ir todas de Caxias. Enfim, quanto tempo vai demorar enfim, né? E assim já pega de Caxias joga pega de Porto Alegre e joga. Tu Daí o cara vai o tempo que faria para buscar todas de Caxias que vão dizer
+08:09 Luis Fernando Boff: tá
+08:13 Mateus Rimoldi Facchin: 200 imobiliárias que busca 200 cidades no cresci e tu atinge 200 lugares.
+08:19 Luis Fernando Boff: Tá então acho que dá para digamos assim, eu tô pensando já no aplicativo dá para ter digamos duas duas Abas assim dentro dele, né? Uma aba que seria o buscador de URL e a outra buscador de móveis então primeiro tu busca no RL aí tu manda para ela lá, eu quero que tu entre no cresci ali do de Caxias do Sul e distrai ali para o meu banco de dados. Aí ela mesmo já consegue extrair e sempre sempre mostrando para tia depois para provar, né? Ó extrair essas aqui e tals posso colocar na mão de dados os cara autoriza.
+08:49 Luis Fernando Boff: Uma vez autorizado tu pode ir para outra aba que é o buscador dentro dessas que já estão no teu banco de dados e tu vai poder selecionar, né? Então acho que Era para fazer duas dessas formas. Tá legal, cara, falando um pouco de tokens, né? Então isso vai estaria usando tokens. Como que pensa em fazer isso, por exemplo no início botar os tokens ali
+09:10 Mateus Rimoldi Facchin: Aqueles pagamentos para utilizar.
+09:14 Luis Fernando Boff: digamos tu criar uma conta na opinião. E o eventualmente cada um que fizer o login usar os seus. A gente vai estar tendo que ter um custozinho ali de cara, tipo é centavos, né? Centavos de Dólares às vezes Tipo isso às vezes vai me dar muito pouco. Sei lá, tu vai fazer. Mil requisições vai dar um dólar, né? Então tipo vai dar centavos, mas alguém vai ter que estar pagando tem duas formas de fazer ou tipo a gente pega e bota um cartão nosso e cobra o cliente já é um plano que já tá incluso ou cada cliente teria que se botar o seu o ruim de ficar a cliente botar o seu é que é mais uma etapa para o cliente final ter que ir lá e cadastrar e botar ali, se a gente botar o nosso já tá incluso. Ele só faz o login e entra e não se preocupa, né? Então acho que Inicialmente vamos vamos botar assim, vou
+10:04 Mateus Rimoldi Facchin: Sim, é mais me viável é dessa forma.
+10:09 Luis Fernando Boff: botar uma pi só a gente cria uma conta ali e bota um cartão de crédito. Aí depois a gente tiver, mas cara vou te falar que isso aí vai tipo vai botar cinco dólares ali, cara, você vai durar ainda mais que por enquanto vai ser só protestando ali, tipo, você vai melhorar sei lá um ano, não sei entende? Como é que a gente vai fazer essa pesquisa, né? De repente formas. Ok então acho que isso foi.
+10:32 Luis Fernando Boff: cara Alguma parte de identidade visual alguma coisa isso se importa não.
+10:37 Mateus Rimoldi Facchin: Ah não eu não Nem cheguei a pensar é mas é é a ideia do escopo mesmo da da Necessidade, né?
+10:45 Luis Fernando Boff: Eu penso tudo isso, porque para evitar retrabalho né? Se por um acaso tu tem
+10:47 Mateus Rimoldi Facchin: Claro
+10:50 Luis Fernando Boff: alguma referência de visual que tu acha legal de algum site alguma coisa, tu pode me mandando dizer baliza esse cara aqui, eu gostei desse interface de comunicação, gostei desses botão, gostei desses filtro da área para a gente botar tipo dá né? Mas se não eu vou botar algo meio que deixar ir ver como ela se vira e a gente vai ajustando.
+11:09 Mateus Rimoldi Facchin: Eu tenho ali a Imóveis chamando o site daria aqui. Elas são parecidas, eu não quero criar um concorrente para ela que é mobile também é um buscador Imobiliário. Só que ela é mais voltada, vamos dizer para um OLX assim alguma coisa esse outro buscador que quer desenvolver. Seria parecido. Mas seria mais para daqui a pouco um investidor. Alguém que entenda um pouco mais de móveis, né alguém que que saiba o que quer.
+11:42 Luis Fernando Boff: tá
+11:42 Mateus Rimoldi Facchin: Mas nesse sentido Podemos até pensar em alguma questão Um conjunta, entendeu? Daqui a pouco o outro braço imobiliário dentro da immobile. dá para
+11:55 Luis Fernando Boff: Aí mobile.
+11:58 Mateus Rimoldi Facchin: Históricos. Então são ele é um negócio também para ser um negócio bom ali, né? Vamos fazer daqui a pouco dá para fazer puxar o marketing já dentro da imob Claro não posso criar um concorrente ali dentro.
+12:12 Luis Fernando Boff: uhum
+12:13 Mateus Rimoldi Facchin: Entende, mas alguma coisa que agregue que daí Ficaria legal, né? Ficaria.
+12:18 Luis Fernando Boff: É que é mobile é mais para cliente Final. O que a gente estaria fazendo é mais para o vendedor que vai vender o imóvel, né ou não também depende né?
+12:26 Mateus Rimoldi Facchin: Não vamos dizer a minha eu sou eu sou cliente final né? Vamos dizer eu quero comprar das imobiliárias. O meu perfil né? Pode ser o mesmo que o teu por exemplo tô buscando um apartamento. Sei lá, em vez de tu olhar em 10 20 30 imobiliárias, tu vai só ali, tu vai ver todos que estão ali. Só que claro que que a gente vai cobrar para essa pessoa. Daqui a pouco ela vai ter que pagar uma mensalidade para acessar a plataforma, né alguma coisa assim, aí tem que se pensar o que que Que que dá para fazer né?
+13:07 Luis Fernando Boff: Cara acho que é isso, inicialmente acho que tem algum ponto que a gente não entrou.
+13:14 Mateus Rimoldi Facchin: Não não tem muito que ela é básica é bem básico, né para mim tipo é um
+13:17 Luis Fernando Boff: Tá o formato que ela te devolveria, tu acha que deveria ser os imóveis ali
+13:21 Mateus Rimoldi Facchin: super buscador Imobiliário. Porque em vez tu tem uma Eu particularmente para mim e a minha maior dor do negócio, entendeu? Eu quero já comprar outros Imóveis, cara, mas é difícil cara. É difícil achar o imóvel ideal para mim, né. Atrás, né? Então isso aí para mim ao meu ver. Poxa vai me solucionar um. Negócio gigantesco, né, cara?
+13:56 Luis Fernando Boff: não numa lista com o link para acessar o imóvel ali. Talvez um Excel possa exportar ali o cara exporta e
+14:03 Mateus Rimoldi Facchin: Perfeito é isso aí, daqui a pouco o link direto do anúncio do imobiliário que eu clique vou para Imobiliária entra em contato direto exporto realmente o Excel com todas esses esses Imóveis que é do meu perfil. É isso não tem muito mais do que. é bem
+14:21 Luis Fernando Boff: Cara, beleza. Hoje é dia 25/02 essa semana acho que não vou conseguir olhar isso. Mas a gente pode combinar ali no dia 11 de repente.
+14:34 Mateus Rimoldi Facchin: tá
+14:35 Luis Fernando Boff: Ou até antes não, mas é que antes vai ficar f***. Vamos botar na quarta-feira dia 11 ali então. Mais uma reunião e aí provavelmente eu já vou ter alguma coisa para te apresentar nem que seja o mais crua, mas já vou ter alguma coisa para te apresentar, tu já vem com essa ideia do nome ali. E a gente começa a testar que que tu acha?
+14:59 Mateus Rimoldi Facchin: Sim, beleza, beleza. Beleza. Beleza, beleza, beleza.
+15:03 Luis Fernando Boff: tá Cara, beleza, tu quer criar? Vamos criar um grupo no Whats ali, nem que seja só eu e tu. Eu vou criar aqui eu vou botar como. Eu vou estar super buscador.
+15:19 Mateus Rimoldi Facchin: Pode ser?
+15:25 Luis Fernando Boff: Pois a gente pensa.
+15:27 Mateus Rimoldi Facchin: No nome comercial, né?
+15:29 Luis Fernando Boff: O nome mas eu creio aqui então, daí vamos tentar só daí o que a gente for falar disso, a gente deixa ali o que for falar de outras coisas a gente fala pessoal só para deixar Centralizado desse projeto aqui. Mais organizadinho tá Não beleza, se tu quiser começar a pensar nessa parte ali tipo comercial de eventualmente, como que vai fazer se vai ter um logo se vai ter um homem se vai ter um branding alguma cor desse estilo, eu vou deixar essa parte mais contigo tá? Aí tu pensa um pouco nessa parte mais comercial.
+16:03 Mateus Rimoldi Facchin: Cara eu validando o negócio poxa validou daí Claro. Daí tem eu tenho já um pessoal de marketing. Daí depois é anúncio. Não tem muito. Mas pode deixar pode deixar que eu penso toda essa estruturação.
+16:19 Luis Fernando Boff: Eu vou botar ele numa base de dados que que eu sei que dá para gente botar lá de forma gratuita, a gente bota uma qualidade gratuito ali eu boto no outro software que é gratuito no início que acho que no início você pagando essas coisas, né? Aí depois se vê que está lá tem muito cliente, aí você tem que tem que começar a pagar alguns planos para ali, ele vai em torno de 20 dólares por mês, daí é só quando começar a ter.
+16:44 Mateus Rimoldi Facchin: Claro
+16:45 Luis Fernando Boff: Não não precisa
+16:47 Mateus Rimoldi Facchin: Show Beleza
+16:49 Luis Fernando Boff: Cara isso então rapidinho mesmo, mas só para eu gravei aqui daí já já gera aqui uma atazinha ali bota no grupo ali que eu fiquei ficou. E desde já eu jogo para mim asiar também daí dizendo ó, me ajuda a fazer isso aqui já já começa a fazer alguma coisa.
+17:04 Mateus Rimoldi Facchin: Fechou, tamo junto então.
+17:06 Luis Fernando Boff: Tá, valeu.
+  

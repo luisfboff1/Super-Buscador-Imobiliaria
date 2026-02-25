@@ -1,0 +1,178 @@
+﻿<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Fontes — Super Buscador</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="sidebar-logo-mark">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path stroke-linecap="round" d="M21 21l-4.35-4.35"/></svg>
+    </div>
+    <div class="sidebar-logo-text">Super Buscador <span>Workspace Mateus</span></div>
+  </div>
+  <nav class="sidebar-nav">
+    <div class="sidebar-section-title">Principal</div>
+    <a href="dashboard.html" class="sidebar-item">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      Dashboard
+    </a>
+    <a href="buscador.html" class="sidebar-item">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><circle cx="11" cy="11" r="8"/><path stroke-linecap="round" d="M21 21l-4.35-4.35"/></svg>
+      Buscador
+    </a>
+    <a href="historico.html" class="sidebar-item">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      Histórico
+    </a>
+    <div class="sidebar-section-title">Configurações</div>
+    <a href="fontes.html" class="sidebar-item active">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
+      Fontes
+      <span class="sidebar-badge-danger">3</span>
+    </a>
+    <a href="configuracoes.html" class="sidebar-item">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      Configurações
+    </a>
+  </nav>
+  <div class="sidebar-bottom">
+    <div class="sidebar-progress">
+      <div class="sidebar-progress-label"><span>Buscas IA hoje</span><span>6/10</span></div>
+      <div class="sidebar-progress-bar"><div class="sidebar-progress-fill" style="width:60%"></div></div>
+    </div>
+    <div class="sidebar-user">
+      <div class="sidebar-avatar">M</div>
+      <div class="sidebar-user-info">
+        <div class="sidebar-user-name">Mateus Rimoldi</div>
+        <div class="sidebar-user-plan">Plano Gratuito</div>
+      </div>
+    </div>
+  </div>
+</aside>
+
+<main class="main-content">
+  <div class="topbar">
+    <div>
+      <div class="topbar-title">Fontes</div>
+      <div class="topbar-sub">Gerencie as imobiliárias que o sistema rastreia</div>
+    </div>
+    <div class="topbar-actions">
+      <button class="btn btn-primary">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Adicionar fonte
+      </button>
+    </div>
+  </div>
+
+  <div class="page-inner">
+    <div class="alert alert-warning" style="margin-bottom:20px;">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linejoin="round" d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <div><strong>3 fontes com erro</strong> — Verifique as URLs ou tente sincronizar novamente.</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:14px;">
+      <div class="card">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+          <span class="dot dot-green"></span>
+          <div style="flex:1;">
+            <div style="font-size:13.5px;font-weight:700;color:#0f172a;">imobhorizonte.com.br</div>
+            <div style="font-size:12px;color:#64748b;">Última sinc: hoje 14:20</div>
+          </div>
+          <span class="badge badge-success">Ativo</span>
+        </div>
+        <div style="display:flex;gap:16px;font-size:12.5px;color:#64748b;margin-bottom:14px;">
+          <span>523 imóveis</span>
+          <span>CRECI extraído</span>
+          <span>8 erros ignorados</span>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-ghost" style="font-size:12px;flex:1;justify-content:center;">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+            Sincronizar
+          </button>
+          <button class="btn btn-ghost" style="font-size:12px;flex:1;justify-content:center;">Configurar</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+          <span class="dot dot-green"></span>
+          <div style="flex:1;">
+            <div style="font-size:13.5px;font-weight:700;color:#0f172a;">casasul.imob.com.br</div>
+            <div style="font-size:12px;color:#64748b;">Última sinc: hoje 13:55</div>
+          </div>
+          <span class="badge badge-success">Ativo</span>
+        </div>
+        <div style="display:flex;gap:16px;font-size:12.5px;color:#64748b;margin-bottom:14px;">
+          <span>318 imóveis</span>
+          <span>CRECI extraído</span>
+          <span>2 erros ignorados</span>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-ghost" style="font-size:12px;flex:1;justify-content:center;">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+            Sincronizar
+          </button>
+          <button class="btn btn-ghost" style="font-size:12px;flex:1;justify-content:center;">Configurar</button>
+        </div>
+      </div>
+
+      <div class="card" style="border-color:rgba(239,68,68,0.25);background:rgba(254,242,242,0.6);">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+          <span class="dot dot-red"></span>
+          <div style="flex:1;">
+            <div style="font-size:13.5px;font-weight:700;color:#0f172a;">imovelprime.com.br</div>
+            <div style="font-size:12px;color:#ef4444;">Erro 403 — Acesso negado</div>
+          </div>
+          <span class="badge badge-danger">Erro</span>
+        </div>
+        <div style="font-size:12.5px;color:#64748b;margin-bottom:14px;">Última tentativa: hoje 12:00 — 0 imóveis</div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-ghost" style="font-size:12px;flex:1;justify-content:center;">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+            Tentar novamente
+          </button>
+          <button class="btn btn-ghost" style="font-size:12px;flex:1;justify-content:center;">Editar URL</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+          <span class="dot dot-green"></span>
+          <div style="flex:1;">
+            <div style="font-size:13.5px;font-weight:700;color:#0f172a;">realtysul.com.br</div>
+            <div style="font-size:12px;color:#64748b;">Última sinc: hoje 11:30</div>
+          </div>
+          <span class="badge badge-success">Ativo</span>
+        </div>
+        <div style="display:flex;gap:16px;font-size:12.5px;color:#64748b;margin-bottom:14px;">
+          <span>142 imóveis</span>
+          <span>CRECI pendente</span>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-ghost" style="font-size:12px;flex:1;justify-content:center;">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+            Sincronizar
+          </button>
+          <button class="btn btn-ghost" style="font-size:12px;flex:1;justify-content:center;">Configurar</button>
+        </div>
+      </div>
+
+      <div class="card" style="border-style:dashed;background:rgba(248,250,252,0.7);cursor:pointer;" onclick="void(0)">
+        <div style="text-align:center;padding:20px 12px;">
+          <div style="width:36px;height:36px;border-radius:10px;background:#f1f5f9;border:1.5px dashed #cbd5e1;display:flex;align-items:center;justify-content:center;margin:0 auto 10px;">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" style="width:16px;height:16px;color:#94a3b8;"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </div>
+          <div style="font-size:13px;font-weight:600;color:#64748b;">Adicionar nova fonte</div>
+          <div style="font-size:12px;color:#94a3b8;margin-top:4px;">Cole a URL da imobiliária</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+</body>
+</html>

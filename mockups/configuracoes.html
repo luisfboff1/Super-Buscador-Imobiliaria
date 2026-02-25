@@ -1,0 +1,181 @@
+﻿<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Configurações — Super Buscador</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="sidebar-logo-mark">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path stroke-linecap="round" d="M21 21l-4.35-4.35"/></svg>
+    </div>
+    <div class="sidebar-logo-text">Super Buscador <span>Workspace Mateus</span></div>
+  </div>
+  <nav class="sidebar-nav">
+    <div class="sidebar-section-title">Principal</div>
+    <a href="dashboard.html" class="sidebar-item">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      Dashboard
+    </a>
+    <a href="buscador.html" class="sidebar-item">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><circle cx="11" cy="11" r="8"/><path stroke-linecap="round" d="M21 21l-4.35-4.35"/></svg>
+      Buscador
+    </a>
+    <a href="historico.html" class="sidebar-item">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      Histórico
+    </a>
+    <div class="sidebar-section-title">Configurações</div>
+    <a href="fontes.html" class="sidebar-item">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
+      Fontes
+      <span class="sidebar-badge-danger">3</span>
+    </a>
+    <a href="configuracoes.html" class="sidebar-item active">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      Configurações
+    </a>
+  </nav>
+  <div class="sidebar-bottom">
+    <div class="sidebar-progress">
+      <div class="sidebar-progress-label"><span>Buscas IA hoje</span><span>6/10</span></div>
+      <div class="sidebar-progress-bar"><div class="sidebar-progress-fill" style="width:60%"></div></div>
+    </div>
+    <div class="sidebar-user">
+      <div class="sidebar-avatar">M</div>
+      <div class="sidebar-user-info">
+        <div class="sidebar-user-name">Mateus Rimoldi</div>
+        <div class="sidebar-user-plan">Plano Gratuito</div>
+      </div>
+    </div>
+  </div>
+</aside>
+
+<main class="main-content">
+  <div class="topbar">
+    <div>
+      <div class="topbar-title">Configurações</div>
+      <div class="topbar-sub">Perfil, plano e preferências</div>
+    </div>
+    <div class="topbar-actions">
+      <button class="btn btn-primary">Salvar alterações</button>
+    </div>
+  </div>
+
+  <div class="page-inner">
+    <div style="display:grid;grid-template-columns:220px 1fr;gap:20px;">
+      <div>
+        <div class="card" style="padding:6px;">
+          <nav style="display:flex;flex-direction:column;gap:2px;">
+            <a href="#" class="sidebar-item active" style="border-radius:7px;font-size:13px;">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+              Perfil
+            </a>
+            <a href="#" class="sidebar-item" style="border-radius:7px;font-size:13px;">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-4 0v2"/></svg>
+              Plano e cobrança
+            </a>
+            <a href="#" class="sidebar-item" style="border-radius:7px;font-size:13px;">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.8 19.79 19.79 0 01.14 1.2 2 2 0 012.11 0h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L6.09 7.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 14.92z"/></svg>
+              Notificações
+            </a>
+            <a href="#" class="sidebar-item" style="border-radius:7px;font-size:13px;">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+              Segurança
+            </a>
+            <a href="#" class="sidebar-item" style="border-radius:7px;font-size:13px;">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+              Membros
+            </a>
+          </nav>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:16px;">
+        <div class="card">
+          <div class="card-header" style="margin-bottom:20px;">
+            <div class="card-title">Informações pessoais</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:16px;margin-bottom:22px;">
+            <div class="sidebar-avatar" style="width:52px;height:52px;font-size:18px;border-radius:14px;">M</div>
+            <div>
+              <div style="font-size:13.5px;font-weight:600;color:#0f172a;margin-bottom:2px;">Mateus Rimoldi Facchin</div>
+              <div style="font-size:12px;color:#64748b;margin-bottom:8px;">mateus@email.com.br</div>
+              <button class="btn btn-ghost" style="font-size:12px;padding:5px 12px;">Alterar foto</button>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+            <div>
+              <label style="display:block;font-size:12.5px;font-weight:600;color:#374151;margin-bottom:5px;">Nome</label>
+              <input type="text" value="Mateus Rimoldi" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13.5px;font-family:'Inter',sans-serif;outline:none;">
+            </div>
+            <div>
+              <label style="display:block;font-size:12.5px;font-weight:600;color:#374151;margin-bottom:5px;">Sobrenome</label>
+              <input type="text" value="Facchin" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13.5px;font-family:'Inter',sans-serif;outline:none;">
+            </div>
+            <div>
+              <label style="display:block;font-size:12.5px;font-weight:600;color:#374151;margin-bottom:5px;">E-mail</label>
+              <input type="email" value="mateus@email.com.br" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13.5px;font-family:'Inter',sans-serif;outline:none;">
+            </div>
+            <div>
+              <label style="display:block;font-size:12.5px;font-weight:600;color:#374151;margin-bottom:5px;">Telefone</label>
+              <input type="tel" value="(51) 99999-0000" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13.5px;font-family:'Inter',sans-serif;outline:none;">
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header" style="margin-bottom:16px;">
+            <div class="card-title">Preferências de notificação</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:14px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+              <div>
+                <div style="font-size:13.5px;font-weight:600;color:#0f172a;">Alertas de novas fontes com erro</div>
+                <div style="font-size:12.5px;color:#64748b;">Receba um e-mail quando uma fonte falhar</div>
+              </div>
+              <label class="toggle-container">
+                <input type="checkbox" checked style="display:none;">
+                <div class="toggle on"><div class="toggle-thumb"></div></div>
+              </label>
+            </div>
+            <div style="border-top:1px solid #f1f5f9;padding-top:14px;display:flex;align-items:center;justify-content:space-between;">
+              <div>
+                <div style="font-size:13.5px;font-weight:600;color:#0f172a;">Resumo semanal</div>
+                <div style="font-size:12.5px;color:#64748b;">Relatório com o resumo das buscas da semana</div>
+              </div>
+              <label class="toggle-container">
+                <input type="checkbox" style="display:none;">
+                <div class="toggle"><div class="toggle-thumb"></div></div>
+              </label>
+            </div>
+            <div style="border-top:1px solid #f1f5f9;padding-top:14px;display:flex;align-items:center;justify-content:space-between;">
+              <div>
+                <div style="font-size:13.5px;font-weight:600;color:#0f172a;">Novidades da plataforma</div>
+                <div style="font-size:12.5px;color:#64748b;">Funcionalidades e atualizações do produto</div>
+              </div>
+              <label class="toggle-container">
+                <input type="checkbox" checked style="display:none;">
+                <div class="toggle on"><div class="toggle-thumb"></div></div>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="border-color:rgba(239,68,68,0.2);">
+          <div class="card-title" style="margin-bottom:6px;color:#dc2626;">Zona de risco</div>
+          <div style="font-size:13px;color:#64748b;margin-bottom:16px;">Ações irreversíveis para a sua conta.</div>
+          <div style="display:flex;gap:10px;">
+            <button class="btn btn-ghost" style="border-color:rgba(239,68,68,0.3);color:#dc2626;font-size:13px;">Excluir todos os dados</button>
+            <button class="btn btn-ghost" style="border-color:rgba(239,68,68,0.3);color:#dc2626;font-size:13px;">Encerrar conta</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+</body>
+</html>
