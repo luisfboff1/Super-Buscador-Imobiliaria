@@ -42,7 +42,7 @@ export const imoveis = pgTable("imoveis", {
   banheiros: integer("banheiros"),
   vagas: integer("vagas"),
   descricao: text("descricao"),
-  imagens: jsonb("imagens").default([]),
+  imagens: text("imagens").array().default(sql`ARRAY[]::text[]`),
   caracteristicas: jsonb("caracteristicas").default({}),
   disponivel: boolean("disponivel").default(true),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -130,8 +130,7 @@ export async function upsertImoveis(fonteId: string, items: ImovelInput[]) {
           banheiros: item.banheiros ?? null,
           vagas: item.vagas ?? null,
           descricao: item.descricao ?? null,
-          // postgres-js interpreta [] como array nativo; cast explícito para jsonb
-          imagens: sql`${JSON.stringify(item.imagens ?? [])}::jsonb`,
+          imagens: item.imagens ?? [],
           caracteristicas: sql`${JSON.stringify(item.caracteristicas ?? {})}::jsonb`,
           disponivel: true,
           updatedAt: new Date(),

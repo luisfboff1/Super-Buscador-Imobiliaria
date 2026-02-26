@@ -267,6 +267,7 @@ export async function discoverPropertyUrls(
 
   // ─── 4. Scraping paralelo de páginas 2..lastPage ──────────────────────────
   const pageNums = Array.from({ length: lastPage - 1 }, (_, i) => i + 2);
+  let emptyBatches = 0;
 
   for (let i = 0; i < pageNums.length; i += PAGE_CONCURRENCY) {
     const batch = pageNums.slice(i, i + PAGE_CONCURRENCY);
@@ -280,6 +281,17 @@ export async function discoverPropertyUrls(
       batchNew += allDetailUrls.size - before;
     }
     log(`[crawler] págs ${batch[0]}-${batch[batch.length - 1]}: +${batchNew} (total: ${allDetailUrls.size})`);
+
+    // Site retornou a mesma página para números altos (sem 404 real) → parar
+    if (batchNew === 0) {
+      emptyBatches++;
+      if (emptyBatches >= 2) {
+        log(`[crawler] 2 batches vazios, site chegou ao fim`);
+        break;
+      }
+    } else {
+      emptyBatches = 0;
+    }
   }
 
   log(`[crawler] ✓ paginação paralela: ${allDetailUrls.size} imóveis em ${lastPage} páginas`);
