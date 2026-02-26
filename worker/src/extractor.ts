@@ -175,7 +175,7 @@ export async function extractPropertyData(
 
   try {
     const { object } = await generateObject({
-      model: groq("llama-3.3-70b-versatile"),
+      model: groq("llama-3.1-8b-instant"),
       schema: ImovelSchema,
       system: SYSTEM_PROMPT,
       prompt: `Extraia os dados do imóvel desta página:\n\nURL: ${url}\n\n${cleanText}`,

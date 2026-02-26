@@ -411,11 +411,17 @@ function extractWithCheerio(
 ): ImovelInput | null {
   const $ = cheerio.load(html);
 
-  // Título
+  // Título — priorizar h1 do conteúdo principal, não da listagem
+  const h1Text = $("h1").first().text().trim();
+  const ogTitle = $('meta[property="og:title"]').attr("content")?.trim() ?? "";
+  const pageTitle = $("title").text().trim();
+
+  // og:title tende a ser mais específico que <title> (que pode ser slogan do site)
+  // Ignorar se for genérico (menor que 10 chars ou igual ao <title>)
   const titulo =
-    $("h1").first().text().trim() ||
-    $('meta[property="og:title"]').attr("content")?.trim() ||
-    $("title").text().trim() ||
+    (h1Text.length > 5 ? h1Text : null) ||
+    (ogTitle.length > 5 && ogTitle !== pageTitle ? ogTitle : null) ||
+    (pageTitle.length > 5 ? pageTitle : null) ||
     null;
 
   if (!titulo) return null;
