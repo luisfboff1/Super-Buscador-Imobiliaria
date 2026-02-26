@@ -1,7 +1,6 @@
 import { chromium, type Browser, type Page } from "playwright";
-import * as cheerio from "cheerio";
 import type { ImovelInput } from "./db.js";
-import { extractPropertyData } from "./extractor.js";
+import { extractPropertyData, extractFromJsonLd, extractImages } from "./extractor.js";
 
 // ─── Filtros de URL ──────────────────────────────────────────────────────────
 
@@ -299,242 +298,120 @@ export async function discoverPropertyUrls(
 }
 
 // ─── Extração de dados de uma página de detalhe ──────────────────────────────
+//
+// Cascata de velocidade:
+//   1. HTTP fetch  — sem browser, rápido (~0.5s), funciona se o site é SSR
+//   2. Playwright  — fallback para sites com JS rendering (mais lento, usa RAM)
+//
+// Extração:
+//   1. JSON-LD  — dados estruturados embutidos, grátis e perfeito
+//   2. LLM      — Groq lê o HTML e entende tudo, sem heurísticas
+
+// Helper: fetch simples sem browser
+async function fetchHtml(url: string): Promise<string | null> {
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,*/*",
+        "Accept-Language": "pt-BR,pt;q=0.9",
+      },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) return null;
+    return await res.text();
+  } catch {
+    return null;
+  }
+}
+
+// Helper: detecta se o HTML tem conteúdo real ou só shell JS
+function hasRealContent(html: string): boolean {
+  // Site com JS rendering tem <body> quase vazio
+  const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  if (!bodyMatch) return false;
+  const bodyText = bodyMatch[1].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+  return bodyText.length > 500; // conteúdo real tem mais de 500 chars visíveis
+}
 
 export async function scrapePropertyPage(
   url: string,
   fallbackCidade?: string | null,
   fallbackEstado?: string | null
 ): Promise<ImovelInput | null> {
-  const browser = await getBrowser();
-  const page = await browser.newPage();
 
-  try {
-    // Bloquear recursos desnecessários para carregar mais rápido
-    await page.route("**/*", (route) => {
-      const type = route.request().resourceType();
-      if (["image", "media", "font", "stylesheet"].includes(type)) {
-        route.abort();
-      } else {
-        route.continue();
-      }
-    });
+  // ── 1. Tentar HTTP fetch primeiro (muito mais rápido que Playwright) ─────────
+  let html = await fetchHtml(url);
+  let source = "http";
 
-    const response = await page.goto(url, {
-      waitUntil: "domcontentloaded", // mais rápido que networkidle
-      timeout: 20000,
-    });
-
-    if (!response || response.status() >= 400) {
-      console.log(`[crawler] ✗ HTTP ${response?.status()} — ${url}`);
-      return null;
-    }
-
-    // Scroll para ativar lazy loading de imagens
-    await autoScroll(page);
-
-    const html = await page.content();
-    const pageTitle = await page.title();
-
-    // Detectar 404 soft (página existe mas conteúdo é "não encontrado")
-    const titleLower = pageTitle.toLowerCase();
-    if (
-      titleLower.includes("404") ||
-      titleLower.includes("não encontrad") ||
-      titleLower.includes("not found")
-    ) {
-      console.log(`[crawler] ✗ 404 soft — ${url}`);
-      return null;
-    }
-
-    // Tentar extração via cheerio primeiro (rápido, sem LLM)
-    const cheerioResult = extractWithCheerio(html, url);
-
-    // Se cheerio pegou dados suficientes, usa direto
-    if (
-      cheerioResult &&
-      cheerioResult.preco &&
-      (cheerioResult.quartos || cheerioResult.bairro)
-    ) {
-      cheerioResult.cidade = cheerioResult.cidade || fallbackCidade || null;
-      cheerioResult.estado = cheerioResult.estado || fallbackEstado || null;
-      console.log(
-        `[crawler] ✓ [cheerio] ${cheerioResult.titulo} — R$ ${cheerioResult.preco?.toLocaleString("pt-BR")} — ${cheerioResult.bairro || "?"}`
-      );
-      return cheerioResult;
-    }
-
-    // Fallback: extração via LLM (Groq)
-    const llmResult = await extractPropertyData(html, url);
-    if (llmResult) {
-      llmResult.cidade = llmResult.cidade || fallbackCidade || null;
-      llmResult.estado = llmResult.estado || fallbackEstado || null;
-
-      // Filtrar aluguel
-      const transacao = (llmResult as Record<string, unknown>).transacao;
-      if (typeof transacao === "string" && /alug/i.test(transacao)) {
-        console.log(`[crawler] ✗ aluguel (ignorado) — ${url}`);
+  if (!html || !hasRealContent(html)) {
+    // Site precisa de JS — usar Playwright como fallback
+    source = "playwright";
+    const browser = await getBrowser();
+    const page = await browser.newPage();
+    try {
+      // Bloquear tudo que não é HTML (economizar RAM no Railway)
+      await page.route("**/*", (route) => {
+        if (["image", "media", "font", "stylesheet", "other"].includes(route.request().resourceType())) {
+          route.abort();
+        } else {
+          route.continue();
+        }
+      });
+      const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
+      if (!response || response.status() >= 400) {
+        console.log(`[crawler] ✗ HTTP ${response?.status()} — ${url}`);
         return null;
       }
-
-      console.log(
-        `[crawler] ✓ [llm] ${llmResult.titulo} — R$ ${llmResult.preco?.toLocaleString("pt-BR") || "?"} — ${llmResult.bairro || "?"}`
-      );
-      return llmResult;
+      html = await page.content();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[crawler] ✗ playwright ${url}: ${msg}`);
+      return null;
+    } finally {
+      await page.close();
     }
+  }
 
-    // Cheerio parcial é melhor que nada
-    if (cheerioResult) {
-      cheerioResult.cidade = cheerioResult.cidade || fallbackCidade || null;
-      cheerioResult.estado = cheerioResult.estado || fallbackEstado || null;
-      console.log(
-        `[crawler] ✓ [parcial] ${cheerioResult.titulo} — ${url}`
-      );
-      return cheerioResult;
-    }
+  if (!html) return null;
 
-    console.log(`[crawler] ✗ sem dados extraíveis — ${url}`);
+  // 404 soft
+  if (/404|não encontrad|not found/i.test(html.slice(0, 2000))) {
+    console.log(`[crawler] ✗ 404 — ${url}`);
     return null;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[crawler] ✗ erro ${url}: ${msg}`);
-    return null;
-  } finally {
-    await page.close();
-  }
-}
-
-// ─── Cheerio: extração heurística (rápida, sem LLM) ─────────────────────────
-
-function extractWithCheerio(
-  html: string,
-  url: string
-): ImovelInput | null {
-  const $ = cheerio.load(html);
-
-  // Título — priorizar h1 do conteúdo principal, não da listagem
-  const h1Text = $("h1").first().text().trim();
-  const ogTitle = $('meta[property="og:title"]').attr("content")?.trim() ?? "";
-  const pageTitle = $("title").text().trim();
-
-  // og:title tende a ser mais específico que <title> (que pode ser slogan do site)
-  // Ignorar se for genérico (menor que 10 chars ou igual ao <title>)
-  const titulo =
-    (h1Text.length > 5 ? h1Text : null) ||
-    (ogTitle.length > 5 && ogTitle !== pageTitle ? ogTitle : null) ||
-    (pageTitle.length > 5 ? pageTitle : null) ||
-    null;
-
-  if (!titulo) return null;
-
-  // Preço — buscar padrão R$ XXX.XXX
-  let preco: number | null = null;
-  const precoText =
-    $('[class*="preco"], [class*="price"], [class*="valor"]')
-      .first()
-      .text() || $("body").text();
-  const precoMatch = precoText.match(
-    /R\$\s*([\d.,]+)/
-  );
-  if (precoMatch) {
-    const cleaned = precoMatch[1]
-      .replace(/\./g, "")
-      .replace(",", ".");
-    preco = parseFloat(cleaned) || null;
   }
 
-  // Quartos
-  let quartos: number | null = null;
-  const quartosMatch = $("body")
-    .text()
-    .match(/(\d+)\s*(?:quartos?|dormit|dorm|suítes?)/i);
-  if (quartosMatch) quartos = parseInt(quartosMatch[1]);
+  // Imagens via Cheerio (URLs, sem raciocínio necessário)
+  const imagens = extractImages(html);
 
-  // Banheiros
-  let banheiros: number | null = null;
-  const banheirosMatch = $("body")
-    .text()
-    .match(/(\d+)\s*(?:banheiros?|WC|lavabo)/i);
-  if (banheirosMatch) banheiros = parseInt(banheirosMatch[1]);
-
-  // Vagas
-  let vagas: number | null = null;
-  const vagasMatch = $("body")
-    .text()
-    .match(/(\d+)\s*(?:vagas?|garagem)/i);
-  if (vagasMatch) vagas = parseInt(vagasMatch[1]);
-
-  // Área
-  let areaM2: number | null = null;
-  const areaMatch = $("body")
-    .text()
-    .match(/([\d.,]+)\s*m²/i);
-  if (areaMatch) {
-    areaM2 = parseFloat(areaMatch[1].replace(",", ".")) || null;
+  // ── 2. JSON-LD — dados estruturados embutidos, sem LLM ─────────────────────
+  const jsonLdResult = extractFromJsonLd(html, url);
+  if (jsonLdResult?.titulo && jsonLdResult?.preco) {
+    jsonLdResult.cidade = jsonLdResult.cidade || fallbackCidade || null;
+    jsonLdResult.estado = jsonLdResult.estado || fallbackEstado || null;
+    jsonLdResult.imagens = imagens.length ? imagens : jsonLdResult.imagens;
+    console.log(`[crawler] ✓ [json-ld/${source}] ${jsonLdResult.titulo} — R$${jsonLdResult.preco?.toLocaleString("pt-BR")} — ${jsonLdResult.bairro ?? "?"}`);
+    return jsonLdResult;
   }
 
-  // Imagens
-  const imagens: string[] = [];
-  $(
-    'img[src*="imovel"], img[src*="property"], img[src*="foto"], img[data-src]'
-  ).each((_, el) => {
-    const src =
-      $(el).attr("src") || $(el).attr("data-src") || $(el).attr("data-lazy-src");
-    if (src && src.startsWith("http") && !src.includes("logo") && !src.includes("icon")) {
-      imagens.push(src);
+  // ── 3. LLM — lê o HTML e entende o conteúdo sem heurísticas ───────────────
+  const llmResult = await extractPropertyData(html, url);
+  if (llmResult) {
+    llmResult.cidade = llmResult.cidade || fallbackCidade || null;
+    llmResult.estado = llmResult.estado || fallbackEstado || null;
+    llmResult.imagens = imagens.length ? imagens : llmResult.imagens;
+
+    const transacao = (llmResult as Record<string, unknown>).transacao;
+    if (typeof transacao === "string" && /alug/i.test(transacao)) {
+      console.log(`[crawler] ✗ aluguel ignorado — ${url}`);
+      return null;
     }
-  });
 
-  // OG images como fallback
-  $('meta[property="og:image"]').each((_, el) => {
-    const content = $(el).attr("content");
-    if (content && content.startsWith("http")) imagens.push(content);
-  });
-
-  // Tipo
-  let tipo: string | null = null;
-  const tipoPatterns = [
-    "apartamento",
-    "casa",
-    "terreno",
-    "sobrado",
-    "kitnet",
-    "cobertura",
-    "sala comercial",
-    "loft",
-    "pavilhão",
-    "galpão",
-    "loja",
-  ];
-  const tituloLower = (titulo || "").toLowerCase();
-  for (const t of tipoPatterns) {
-    if (tituloLower.includes(t)) {
-      tipo = t;
-      break;
-    }
+    return llmResult;
   }
 
-  // Bairro — tentar extrair de breadcrumb ou meta
-  const bairro =
-    $('[class*="bairro"], [class*="neighborhood"], [class*="endereco"] span')
-      .first()
-      .text()
-      .trim() || null;
-
-  return {
-    urlAnuncio: url,
-    titulo,
-    tipo,
-    preco,
-    quartos,
-    banheiros,
-    vagas,
-    areaM2,
-    bairro,
-    cidade: null,
-    estado: null,
-    descricao: $('meta[name="description"]').attr("content")?.trim() || null,
-    imagens: [...new Set(imagens)],
-  };
+  console.log(`[crawler] ✗ sem dados — ${url}`);
+  return null;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
