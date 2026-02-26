@@ -8,6 +8,7 @@
  * Autenticação via header: Authorization: Bearer <WORKER_SECRET>
  */
 
+import "dotenv/config"; // carrega .env em dev (no-op em produção sem .env)
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import {

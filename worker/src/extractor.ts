@@ -8,7 +8,7 @@
  * Cheerio é usado APENAS para imagens (URLs, não precisa de raciocínio).
  */
 
-import { generateObject } from "ai";
+import { generateText } from "ai";
 import { groq } from "@ai-sdk/groq";
 import { z } from "zod";
 import * as cheerio from "cheerio";
@@ -155,6 +155,22 @@ function htmlToCleanText(html: string): string {
   return text;
 }
 
+// Guia do schema em texto para incluir no prompt
+const SCHEMA_GUIDE = `{
+  "titulo": "string|null — título do anúncio",
+  "tipo": "casa|apartamento|terreno|comercial|rural|cobertura|kitnet|sobrado|flat|loft|galpao|sala|loja|outro|null",
+  "transacao": "venda|aluguel|ambos|null",
+  "cidade": "string|null",
+  "bairro": "string|null",
+  "estado": "string|null — sigla 2 letras maiúsculas (RS, SP, SC...)",
+  "preco": "number|null — valor de VENDA em reais, sem centavos",
+  "areaM2": "number|null",
+  "quartos": "integer|null",
+  "banheiros": "integer|null",
+  "vagas": "integer|null",
+  "descricao": "string|null — máximo 500 caracteres"
+}`;
+
 // ─── 4. Extração via LLM ─────────────────────────────────────────────────────
 
 export async function extractPropertyData(
@@ -169,32 +185,43 @@ export async function extractPropertyData(
   }
 
   try {
-    const { object } = await generateObject({
+    // generateText com instrução de JSON — funciona em 100% dos modelos Groq
+    const { text } = await generateText({
       model: groq("llama-3.1-8b-instant"),
-      schema: ImovelSchema,
-      system: SYSTEM_PROMPT,
-      prompt: `Extraia os dados do imóvel desta página:\n\nURL: ${url}\n\n${cleanText}`,
+      system: SYSTEM_PROMPT + `\n\nResponda APENAS com um objeto JSON válido seguindo este schema:\n${SCHEMA_GUIDE}\nNenhum texto antes ou depois do JSON.`,
+      prompt: `URL: ${url}\n\n${cleanText}`,
       temperature: 0,
     });
 
+    // Extrair JSON da resposta (pode vir com ```json ... ```)
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      console.error(`[extractor] ✗ sem JSON na resposta — ${url}`);
+      return null;
+    }
+
+    const raw = JSON.parse(jsonMatch[0]);
+    const parsed = ImovelSchema.safeParse(raw);
+    const data = parsed.success ? parsed.data : raw;
+
     const result: ImovelInput = {
       urlAnuncio: url,
-      titulo: object.titulo ?? null,
-      tipo: object.tipo ?? null,
-      cidade: object.cidade ?? null,
-      bairro: object.bairro ?? null,
-      estado: object.estado ?? null,
-      preco: object.preco && object.preco > 1000 ? object.preco : null,
-      areaM2: object.areaM2 && object.areaM2 > 0 ? object.areaM2 : null,
-      quartos: object.quartos && object.quartos > 0 ? object.quartos : null,
-      banheiros: object.banheiros && object.banheiros > 0 ? object.banheiros : null,
-      vagas: object.vagas && object.vagas > 0 ? object.vagas : null,
-      descricao: object.descricao ?? null,
+      titulo: data.titulo ?? null,
+      tipo: data.tipo ?? null,
+      cidade: data.cidade ?? null,
+      bairro: data.bairro ?? null,
+      estado: data.estado ?? null,
+      preco: data.preco && data.preco > 1000 ? data.preco : null,
+      areaM2: data.areaM2 && data.areaM2 > 0 ? data.areaM2 : null,
+      quartos: data.quartos && data.quartos > 0 ? data.quartos : null,
+      banheiros: data.banheiros && data.banheiros > 0 ? data.banheiros : null,
+      vagas: data.vagas && data.vagas > 0 ? data.vagas : null,
+      descricao: data.descricao ?? null,
       imagens: [],
     };
 
     // Campo extra para filtro de aluguel em scrapePropertyPage
-    (result as Record<string, unknown>).transacao = object.transacao;
+    (result as Record<string, unknown>).transacao = data.transacao ?? null;
 
     console.log(`[extractor] ✓ [llm] ${result.titulo ?? url} — R$${result.preco?.toLocaleString("pt-BR") ?? "?"} — ${result.bairro ?? "?"}`);
     return result;
