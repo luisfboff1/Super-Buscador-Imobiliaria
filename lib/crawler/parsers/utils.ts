@@ -61,10 +61,10 @@ export function encontrarProximaPagina(html: string, baseUrl: string): string | 
 
   // 3. Parâmetro de paginação — usa exec() (não .match() com flag g, que perde grupos de captura)
   // Encontra a página imediatamente seguinte à atual (currentPage + 1)
-  const currentPageMatch = baseUrl.match(/[?&](?:pagina|page|pg|p)=(\d+)/i);
+  const currentPageMatch = baseUrl.match(/[?&](?:pagina|page|pg|p|start|offset)=(\d+)/i);
   const currentPage = currentPageMatch ? parseInt(currentPageMatch[1], 10) : 1;
 
-  const pageRe = /href=["']([^"']*[?&](?:pagina|page|pg|p)=(\d+)[^"']*)["']/gi;
+  const pageRe = /href=["']([^"']*[?&](?:pagina|page|pg|p|start|offset)=(\d+)[^"']*)["']/gi;
   let bestHref: string | null = null;
   let bestDist = Infinity;
   let m: RegExpExecArray | null;

@@ -1,7 +1,7 @@
 /**
  * Detecta a plataforma de uma imobiliária com base na URL e no HTML da página.
  */
-export type Plataforma = "tecimob" | "jetimob" | "bume" | "imoview" | "generic";
+export type Plataforma = "tecimob" | "jetimob" | "bume" | "imoview" | "sobressai" | "generic";
 
 export function detectarPlataforma(url: string, html: string): Plataforma {
   const urlLower = url.toLowerCase();
@@ -16,6 +16,10 @@ export function detectarPlataforma(url: string, html: string): Plataforma {
     return "bume";
   if (urlLower.includes("imoview.com.br") || htmlLower.includes("imoview"))
     return "imoview";
+
+  // Sobressai (plataforma Next.js para imobiliárias — fotos via CDN sobressai/imobtotal)
+  if (htmlLower.includes("sobressai") || htmlLower.includes("imobtotal") || htmlLower.includes("fotos.sobressai.com.br"))
+    return "sobressai";
 
   // Assinaturas no HTML
   if (htmlLower.includes('"generator":"tecimob"') || htmlLower.includes("powered by tecimob"))

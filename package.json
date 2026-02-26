@@ -14,6 +14,7 @@
     "db:seed": "doppler run -- npx tsx scripts/seed.ts"
   },
   "dependencies": {
+    "@ai-sdk/google": "^3.0.31",
     "@ai-sdk/openai": "^3.0.33",
     "@ai-sdk/react": "^3.0.102",
     "@auth/drizzle-adapter": "^1.11.1",
