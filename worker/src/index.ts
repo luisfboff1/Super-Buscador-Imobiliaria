@@ -114,65 +114,55 @@ async function executeCrawl(fonteId: string) {
     console.log(`[worker] ✓ ${urls.length} URLs salvas no DB\n`);
 
     // 5. Enriquecer cada imóvel (scrape + extração)
-    console.log(`[worker] ── FASE 3: Enriquecimento (${urls.length} imóveis) ──\n`);
+    const MAX_ENRICH = parseInt(process.env.CRAWL_MAX_ENRICH || "0", 10);
+    const urlsToEnrich = MAX_ENRICH > 0 ? urls.slice(0, MAX_ENRICH) : urls;
+    if (MAX_ENRICH > 0) {
+      console.log(`[worker] ── FASE 3: Enriquecimento (limitado a ${MAX_ENRICH}/${urls.length}) ──\n`);
+    } else {
+      console.log(`[worker] ── FASE 3: Enriquecimento (${urls.length} imóveis) ──\n`);
+    }
     let enriched = 0;
     let failed = 0;
-    const BATCH_SIZE = 5;
+    // CONCURRENCY: quantas páginas abrir em paralelo (ajustável via env)
+    const CONCURRENCY = parseInt(process.env.CRAWL_CONCURRENCY || "3", 10);
 
-    for (let i = 0; i < urls.length; i += BATCH_SIZE) {
-      const batch = urls.slice(i, i + BATCH_SIZE);
-      const batchNum = Math.floor(i / BATCH_SIZE) + 1;
-      const totalBatches = Math.ceil(urls.length / BATCH_SIZE);
+    for (let i = 0; i < urlsToEnrich.length; i += CONCURRENCY) {
+      const batch = urlsToEnrich.slice(i, i + CONCURRENCY);
+      const batchNum = Math.floor(i / CONCURRENCY) + 1;
+      const totalBatches = Math.ceil(urlsToEnrich.length / CONCURRENCY);
 
       console.log(
-        `\n[worker] batch ${batchNum}/${totalBatches} (${batch.length} URLs)`
+        `\n[worker] batch ${batchNum}/${totalBatches} — ${batch.length} em paralelo`
       );
 
-      const results: Array<{
-        url: string;
-        data: Awaited<ReturnType<typeof scrapePropertyPage>>;
-      }> = [];
-
-      for (let j = 0; j < batch.length; j++) {
-        const url = batch[j];
-        // Delay entre requests para evitar rate limit
-        if (j > 0) {
-          await new Promise((r) => setTimeout(r, 2000));
-        }
-
-        try {
-          const data = await scrapePropertyPage(
-            url,
-            fonte.cidade,
-            fonte.estado
-          );
-          results.push({ url, data });
-          if (data) enriched++;
-          else failed++;
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          console.error(`[worker] ✗ erro scraping ${url}: ${msg}`);
-          results.push({ url, data: null });
-          failed++;
-        }
-      }
+      // Processar em paralelo com Promise.all
+      const results = await Promise.all(
+        batch.map(async (url) => {
+          try {
+            const data = await scrapePropertyPage(url, fonte.cidade, fonte.estado);
+            if (data) enriched++;
+            else failed++;
+            return { url, data };
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error(`[worker] ✗ erro ${url}: ${msg}`);
+            failed++;
+            return { url, data: null };
+          }
+        })
+      );
 
       // Salvar batch no DB imediatamente (progresso parcial)
-      const toSave = results
-        .filter((r) => r.data !== null)
-        .map((r) => r.data!);
+      const toSave = results.filter((r) => r.data !== null).map((r) => r.data!);
 
       if (toSave.length > 0) {
         await upsertImoveis(fonteId, toSave);
         console.log(
-          `[worker] ✓ batch ${batchNum}: ${toSave.length} salvos (total: ${enriched}/${urls.length})`
+          `[worker] ✓ batch ${batchNum}: ${toSave.length} salvos (total: ${enriched}/${urlsToEnrich.length})`
         );
       }
 
-      // Delay entre batches
-      if (i + BATCH_SIZE < urls.length) {
-        await new Promise((r) => setTimeout(r, 3000));
-      }
+      // sem delay — Railway processa à velocidade natural das páginas
     }
 
     // 6. Marcar imóveis antigos como indisponíveis

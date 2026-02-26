@@ -9,6 +9,12 @@ const SKIP_URL_PATTERNS = [
   /\/(contato|sobre|blog|faq|politica|termos|privacidade|quem-somos)/i,
   /\/(login|cadastro|admin|painel|area-do-cliente|minha-conta)/i,
   /\/(listar|comparar|favorit)/i,
+  /\/(trabalhe|carreiras|equipe|corretor)/i,
+  /\/(plantao|atendimento|simulador|financiamento)/i,
+  // Páginas de listagem / paginação — nunca são imóveis individuais
+  /\/imoveis(\/|$)/i,
+  /\/(page|pagina|pag)\/\d+/i,
+  /[?&](page|pagina|pag)=\d+/i,
   /\/#/,
   /\.(pdf|jpg|jpeg|png|gif|svg|css|js|ico|webp|mp4|xml)(\?|$)/i,
 ];
@@ -135,7 +141,7 @@ export async function discoverPropertyUrls(
     // Percorrer TODAS as páginas usando paginação inteligente
     let pageNum = 2;
     let emptyPages = 0;
-    const MAX_PAGES = 200;
+    const MAX_PAGES = parseInt(process.env.CRAWL_MAX_PAGES || "200", 10);
 
     while (pageNum <= MAX_PAGES && emptyPages < 2) {
       // Detectar próxima página da própria página atual (mais confiável)
@@ -199,9 +205,19 @@ export async function scrapePropertyPage(
   const page = await browser.newPage();
 
   try {
+    // Bloquear recursos desnecessários para carregar mais rápido
+    await page.route("**/*", (route) => {
+      const type = route.request().resourceType();
+      if (["image", "media", "font", "stylesheet"].includes(type)) {
+        route.abort();
+      } else {
+        route.continue();
+      }
+    });
+
     const response = await page.goto(url, {
-      waitUntil: "networkidle",
-      timeout: 30000,
+      waitUntil: "domcontentloaded", // mais rápido que networkidle
+      timeout: 20000,
     });
 
     if (!response || response.status() >= 400) {

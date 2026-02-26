@@ -51,8 +51,21 @@ export const imoveis = pgTable("imoveis", {
 
 // ─── Conexão ─────────────────────────────────────────────────────────────────
 
-const client = postgres(process.env.DATABASE_URL!, { ssl: "require" });
+const client = postgres(process.env.DATABASE_URL!, {
+  ssl: "require",
+  max: 5,
+  idle_timeout: 20,
+  connect_timeout: 10,
+  onnotice: () => {}, // silencia notices
+});
 export const db = drizzle(client);
+
+// Teste de conexão no startup
+client`SELECT 1`.then(() => {
+  console.log("[db] ✓ Conectado ao Neon PostgreSQL via postgres-js");
+}).catch((err: unknown) => {
+  console.error("[db] ✗ ERRO de conexão:", err);
+});
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
@@ -96,9 +109,10 @@ export type ImovelInput = {
 export async function upsertImoveis(fonteId: string, items: ImovelInput[]) {
   if (items.length === 0) return;
 
-  const CHUNK = 50;
+  const CHUNK = 10; // reduzido para evitar queries muito grandes
   for (let i = 0; i < items.length; i += CHUNK) {
     const chunk = items.slice(i, i + CHUNK);
+    try {
     await db
       .insert(imoveis)
       .values(
@@ -142,6 +156,13 @@ export async function upsertImoveis(fonteId: string, items: ImovelInput[]) {
           updatedAt: new Date(),
         },
       });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const cause = (err as Record<string, unknown>)?.cause;
+      console.error(`[db] ✗ upsert falhou (chunk ${i}-${i + CHUNK}):`, msg);
+      if (cause) console.error(`[db]   causa:`, cause);
+      throw err;
+    }
   }
 }
 
