@@ -1,5 +1,5 @@
-import { neon } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-http";
+import postgres from "postgres";
+import { drizzle } from "drizzle-orm/postgres-js";
 import {
   pgTable,
   uuid,
@@ -51,8 +51,8 @@ export const imoveis = pgTable("imoveis", {
 
 // ─── Conexão ─────────────────────────────────────────────────────────────────
 
-const sqlClient = neon(process.env.DATABASE_URL!);
-export const db = drizzle(sqlClient);
+const client = postgres(process.env.DATABASE_URL!, { ssl: "require" });
+export const db = drizzle(client);
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
