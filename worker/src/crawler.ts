@@ -69,7 +69,7 @@ export async function closeBrowser() {
   }
 }
 
-// ─── Descoberta de URLs via listagem com paginação ───────────────────────────
+// ─── Descoberta de URLs via listagem com paginação paralela ─────────────────
 
 export async function discoverPropertyUrls(
   siteUrl: string,
@@ -77,120 +77,212 @@ export async function discoverPropertyUrls(
 ): Promise<string[]> {
   const log = onProgress ?? console.log;
   const browser = await getBrowser();
-  const page = await browser.newPage();
   const baseHostname = new URL(siteUrl).hostname;
   const baseUrl = siteUrl.replace(/\/$/, "");
+  const MAX_PAGES = parseInt(process.env.CRAWL_MAX_PAGES || "200", 10);
+  const PAGE_CONCURRENCY = parseInt(process.env.CRAWL_PAGE_CONCURRENCY || "5", 10);
   const allDetailUrls = new Set<string>();
 
-  try {
-    // Candidatos de listagem — do mais específico para o mais genérico
-    const listingCandidates = [
-      `${baseUrl}/imoveis/venda`,
-      `${baseUrl}/imoveis/comprar`,
-      `${baseUrl}/comprar`,
-      `${baseUrl}/venda`,
-      `${baseUrl}/imoveis?finalidade=venda`,
-      `${baseUrl}/imoveis?tipo=venda`,
-      `${baseUrl}/imoveis`,
-      baseUrl,
-    ];
-
-    // Testar todos os candidatos e escolher o que tem MAIS imóveis
-    let bestUrl: string | null = null;
-    let bestCount = 0;
-
-    for (const candidate of listingCandidates) {
-      log(`[crawler] tentando listagem: ${candidate}`);
-      try {
-        const response = await page.goto(candidate, {
-          waitUntil: "networkidle",
-          timeout: 30000,
-        });
-        if (!response || response.status() >= 400) continue;
-
-        await autoScroll(page);
-        const links = await extractDetailLinks(page, baseHostname);
-
-        log(`[crawler]   → ${links.length} imóveis encontrados`);
-
-        if (links.length > bestCount) {
-          bestCount = links.length;
-          bestUrl = candidate;
-        }
-
-        // Se encontrou um candidato muito bom (30+), não precisamos testar mais
-        if (links.length >= 30) break;
-      } catch {
-        continue;
+  // ─── Helper: cria página Playwright com bloqueio de recursos ─────────────
+  async function newFastPage() {
+    const p = await browser.newPage();
+    await p.route("**/*", (route) => {
+      if (["image", "media", "font", "stylesheet"].includes(route.request().resourceType())) {
+        route.abort();
+      } else {
+        route.continue();
       }
-    }
-
-    if (!bestUrl || bestCount < 1) {
-      log(`[crawler] nenhuma listagem de venda encontrada`);
-      await page.close();
-      return [];
-    }
-
-    // Carregar o melhor candidato e coletar primeira página
-    log(`[crawler] ✓ melhor listagem: ${bestUrl} (${bestCount} imóveis na pág 1)`);
-    await page.goto(bestUrl, { waitUntil: "networkidle", timeout: 30000 });
-    await autoScroll(page);
-    const firstPageLinks = await extractDetailLinks(page, baseHostname);
-    for (const link of firstPageLinks) allDetailUrls.add(link);
-
-    // Percorrer TODAS as páginas usando paginação inteligente
-    let pageNum = 2;
-    let emptyPages = 0;
-    const MAX_PAGES = parseInt(process.env.CRAWL_MAX_PAGES || "200", 10);
-
-    while (pageNum <= MAX_PAGES && emptyPages < 2) {
-      // Detectar próxima página da própria página atual (mais confiável)
-      const nextUrl = await detectNextPageUrl(page, baseHostname, bestUrl, pageNum);
-      log(`[crawler] pág ${pageNum}: ${nextUrl}`);
-
-      try {
-        const response = await page.goto(nextUrl, {
-          waitUntil: "networkidle",
-          timeout: 30000,
-        });
-
-        if (!response || response.status() >= 400) {
-          log(`[crawler] pág ${pageNum} não existe, parando`);
-          break;
-        }
-
-        await autoScroll(page);
-        const links = await extractDetailLinks(page, baseHostname);
-        const newLinks = links.filter((l) => !allDetailUrls.has(l));
-
-        if (newLinks.length === 0) {
-          emptyPages++;
-          log(
-            `[crawler] pág ${pageNum}: 0 novos (${emptyPages}/2 páginas vazias)`
-          );
-        } else {
-          emptyPages = 0;
-          for (const link of links) allDetailUrls.add(link);
-          log(
-            `[crawler] pág ${pageNum}: +${newLinks.length} novos (total: ${allDetailUrls.size})`
-          );
-        }
-      } catch {
-        log(`[crawler] erro na pág ${pageNum}, parando`);
-        break;
-      }
-
-      pageNum++;
-      await new Promise((r) => setTimeout(r, 1500));
-    }
-
-    log(
-      `[crawler] ✓ paginação concluída: ${allDetailUrls.size} imóveis em ${pageNum - 1} páginas`
-    );
-  } finally {
-    await page.close();
+    });
+    return p;
   }
 
+  // ─── Helper: obtém links de detalhe de um URL de listagem ────────────────
+  async function fetchPageLinks(pageUrl: string): Promise<string[]> {
+    const p = await newFastPage();
+    try {
+      const res = await p.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
+      if (!res || res.status() >= 400) return [];
+      await autoScroll(p);
+      return await extractDetailLinks(p, baseHostname);
+    } catch {
+      return [];
+    } finally {
+      await p.close();
+    }
+  }
+
+  // ─── 1. Encontrar a melhor URL de listagem ────────────────────────────────
+  const listingCandidates = [
+    `${baseUrl}/imoveis/venda`,
+    `${baseUrl}/imoveis/comprar`,
+    `${baseUrl}/comprar`,
+    `${baseUrl}/venda`,
+    `${baseUrl}/imoveis?finalidade=venda`,
+    `${baseUrl}/imoveis?tipo=venda`,
+    `${baseUrl}/imoveis`,
+    baseUrl,
+  ];
+
+  let bestUrl: string | null = null;
+  let bestCount = 0;
+
+  {
+    const p = await newFastPage();
+    try {
+      for (const candidate of listingCandidates) {
+        log(`[crawler] tentando listagem: ${candidate}`);
+        try {
+          const res = await p.goto(candidate, { waitUntil: "domcontentloaded", timeout: 20000 });
+          if (!res || res.status() >= 400) continue;
+          await autoScroll(p);
+          const links = await extractDetailLinks(p, baseHostname);
+          log(`[crawler]   → ${links.length} imóveis encontrados`);
+          if (links.length > bestCount) { bestCount = links.length; bestUrl = candidate; }
+          if (links.length >= 30) break;
+        } catch { continue; }
+      }
+    } finally {
+      await p.close();
+    }
+  }
+
+  if (!bestUrl || bestCount < 1) {
+    log(`[crawler] nenhuma listagem de venda encontrada`);
+    return [];
+  }
+  log(`[crawler] ✓ melhor listagem: ${bestUrl} (${bestCount} imóveis na pág 1)`);
+
+  // ─── 2. Página 1 + detectar template de paginação ────────────────────────
+  let rawPage2Url: string | null = null;
+  {
+    const p = await newFastPage();
+    try {
+      await p.goto(bestUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
+      await autoScroll(p);
+      for (const link of await extractDetailLinks(p, baseHostname)) allDetailUrls.add(link);
+
+      rawPage2Url = await p.evaluate(() => {
+        const page2Selectors = [
+          'a[href*="pagina=2"]', 'a[href*="page=2"]', 'a[href*="pag=2"]', 'a[href*="pg=2"]',
+          'a[href*="/pagina/2"]', 'a[href*="/page/2"]', 'a[href*="/pag/2"]', 'a[href*="/pg/2"]',
+        ];
+        for (const sel of page2Selectors) {
+          const el = document.querySelector(sel) as HTMLAnchorElement | null;
+          if (el?.href) return el.href;
+        }
+        const navLinks = Array.from(document.querySelectorAll(
+          '.pagination a, .paginacao a, [class*="paginat"] a, [class*="pagination"] a'
+        )) as HTMLAnchorElement[];
+        return navLinks.find((a) => a.textContent?.trim() === "2" && a.href)?.href ?? null;
+      });
+    } finally {
+      await p.close();
+    }
+  }
+
+  // Converter URL da pág 2 em template com placeholder {N}
+  let template: string | null = null;
+  if (rawPage2Url) {
+    const patternMap: [RegExp, string][] = [
+      [/([?&]pagina=)2(&|$)/, "$1{N}$2"],
+      [/([?&]page=)2(&|$)/,   "$1{N}$2"],
+      [/([?&]pag=)2(&|$)/,    "$1{N}$2"],
+      [/([?&]pg=)2(&|$)/,     "$1{N}$2"],
+      [/(\/pagina\/)2(\/|$)/, "$1{N}$2"],
+      [/(\/page\/)2(\/|$)/,   "$1{N}$2"],
+      [/(\/pag\/)2(\/|$)/,    "$1{N}$2"],
+      [/(\/pg\/)2(\/|$)/,     "$1{N}$2"],
+    ];
+    for (const [pat, rep] of patternMap) {
+      if (pat.test(rawPage2Url)) { template = rawPage2Url.replace(pat, rep); break; }
+    }
+  }
+
+  const getPageUrl = (n: number) => template!.replace("{N}", String(n));
+
+  if (!template) {
+    // Fallback: paginação sequencial (confiável para sites sem paginação padrão)
+    log(`[crawler] ⚠ template não detectado → modo sequencial`);
+    let pageNum = 2, emptyPages = 0;
+    const p = await newFastPage();
+    try {
+      while (pageNum <= MAX_PAGES && emptyPages < 2) {
+        const nextUrl = await detectNextPageUrl(p, baseHostname, bestUrl, pageNum);
+        log(`[crawler] pág ${pageNum}: ${nextUrl}`);
+        try {
+          const res = await p.goto(nextUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
+          if (!res || res.status() >= 400) { log(`[crawler] pág ${pageNum} não existe`); break; }
+          await autoScroll(p);
+          const links = await extractDetailLinks(p, baseHostname);
+          const newLinks = links.filter((l) => !allDetailUrls.has(l));
+          if (newLinks.length === 0) {
+            emptyPages++;
+            log(`[crawler] pág ${pageNum}: 0 novos (${emptyPages}/2 vazias)`);
+          } else {
+            emptyPages = 0;
+            for (const l of links) allDetailUrls.add(l);
+            log(`[crawler] pág ${pageNum}: +${newLinks.length} (total: ${allDetailUrls.size})`);
+          }
+        } catch { log(`[crawler] erro na pág ${pageNum}`); break; }
+        pageNum++;
+      }
+    } finally {
+      await p.close();
+    }
+    log(`[crawler] ✓ sequencial: ${allDetailUrls.size} imóveis em ${pageNum - 1} páginas`);
+    return [...allDetailUrls];
+  }
+
+  log(`[crawler] ✓ template detectado: ${template}`);
+
+  // ─── 3. Probe paralelo para encontrar última página ───────────────────────
+  const probePoints = [10, 25, 50, 100, 150, 200].filter((n) => n <= MAX_PAGES);
+  const probeResults = await Promise.all(
+    probePoints.map(async (n) => ({
+      n,
+      hasLinks: (await fetchPageLinks(getPageUrl(n))).length > 0,
+    }))
+  );
+  log(`[crawler] probe: ${probeResults.map((r) => `${r.n}=${r.hasLinks ? "✓" : "✗"}`).join(" ")}`);
+
+  const lastGood = [...probeResults].reverse().find((r) => r.hasLinks);
+  const firstEmpty = probeResults.find((r) => !r.hasLinks);
+
+  let lastPage: number;
+  if (!lastGood) {
+    lastPage = 1;
+  } else if (!firstEmpty) {
+    lastPage = MAX_PAGES;
+  } else {
+    // Busca binária entre lastGood.n e firstEmpty.n para encontrar a última página exata
+    let lo = lastGood.n, hi = firstEmpty.n;
+    while (hi - lo > 2) {
+      const mid = Math.floor((lo + hi) / 2);
+      const links = await fetchPageLinks(getPageUrl(mid));
+      if (links.length > 0) lo = mid; else hi = mid;
+    }
+    lastPage = lo;
+  }
+  log(`[crawler] ✓ última página: ${lastPage}`);
+
+  // ─── 4. Scraping paralelo de páginas 2..lastPage ──────────────────────────
+  const pageNums = Array.from({ length: lastPage - 1 }, (_, i) => i + 2);
+
+  for (let i = 0; i < pageNums.length; i += PAGE_CONCURRENCY) {
+    const batch = pageNums.slice(i, i + PAGE_CONCURRENCY);
+    const results = await Promise.all(
+      batch.map(async (n) => ({ n, links: await fetchPageLinks(getPageUrl(n)) }))
+    );
+    let batchNew = 0;
+    for (const { links } of results) {
+      const before = allDetailUrls.size;
+      for (const l of links) allDetailUrls.add(l);
+      batchNew += allDetailUrls.size - before;
+    }
+    log(`[crawler] págs ${batch[0]}-${batch[batch.length - 1]}: +${batchNew} (total: ${allDetailUrls.size})`);
+  }
+
+  log(`[crawler] ✓ paginação paralela: ${allDetailUrls.size} imóveis em ${lastPage} páginas`);
   return [...allDetailUrls];
 }
 
@@ -433,7 +525,7 @@ async function autoScroll(page: Page) {
   await page.evaluate(async () => {
     await new Promise<void>((resolve) => {
       let totalHeight = 0;
-      const distance = 500;
+      const distance = 800;
       const timer = setInterval(() => {
         window.scrollBy(0, distance);
         totalHeight += distance;
@@ -442,16 +534,16 @@ async function autoScroll(page: Page) {
           window.scrollTo(0, 0);
           resolve();
         }
-      }, 100);
-      // Safety timeout
+      }, 80);
+      // Safety timeout reduzido
       setTimeout(() => {
         clearInterval(timer);
         resolve();
-      }, 5000);
+      }, 3000);
     });
   });
-  // Aguardar lazy loading
-  await page.waitForTimeout(1000);
+  // Aguardar renderização pós-scroll
+  await page.waitForTimeout(300);
 }
 
 async function extractDetailLinks(

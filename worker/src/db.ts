@@ -130,8 +130,9 @@ export async function upsertImoveis(fonteId: string, items: ImovelInput[]) {
           banheiros: item.banheiros ?? null,
           vagas: item.vagas ?? null,
           descricao: item.descricao ?? null,
-          imagens: item.imagens ?? [],
-          caracteristicas: (item.caracteristicas ?? {}) as never,
+          // postgres-js interpreta [] como array nativo; cast explícito para jsonb
+          imagens: sql`${JSON.stringify(item.imagens ?? [])}::jsonb`,
+          caracteristicas: sql`${JSON.stringify(item.caracteristicas ?? {})}::jsonb`,
           disponivel: true,
           updatedAt: new Date(),
         }))
