@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { getFonteById, updateFonteStatus, upsertImoveis, markImoveisIndisponiveis } from "@/lib/db/queries";
-import { inngest } from "@/lib/inngest/client";
-import { crawlFonte } from "@/lib/crawler";
+import { getFonteById, updateFonteStatus } from "@/lib/db/queries";
+
+const CRAWLER_WORKER_URL = process.env.CRAWLER_WORKER_URL;
+const WORKER_SECRET = process.env.WORKER_SECRET;
 
 export async function POST(
   req: Request,
@@ -20,32 +21,48 @@ export async function POST(
     return NextResponse.json({ error: "Fonte não encontrada" }, { status: 404 });
   }
 
-  // Em produção usa Inngest (durable jobs com retry).
-  // Em dev executa sincronamente (sem precisar do Inngest dev server).
-  if (process.env.NODE_ENV === "production") {
-    try {
-      await inngest.send({
-        name: "fontes/crawl.requested",
-        data: { fonteId: id },
-      });
-      return NextResponse.json({ status: "queued", fonteId: id });
-    } catch (err) {
-      console.warn("[crawl] Inngest falhou, executando sincronamente:", err);
-      // cai no crawl síncrono abaixo
-    }
+  if (!CRAWLER_WORKER_URL) {
+    return NextResponse.json(
+      { error: "CRAWLER_WORKER_URL não configurado" },
+      { status: 500 }
+    );
   }
 
-  // Crawl síncrono (dev ou fallback)
+  // Dispara crawl no worker (Railway) — retorna imediatamente
   try {
-    await updateFonteStatus(id, "crawling");
-    const imoveis = await crawlFonte({ id: fonte.id, url: fonte.url, cidade: fonte.cidade, estado: fonte.estado });
-    await upsertImoveis(id, imoveis);
-    await markImoveisIndisponiveis(id, imoveis.map((i) => i.urlAnuncio));
-    await updateFonteStatus(id, "ok");
-    return NextResponse.json({ status: "done", fonteId: id, imoveisEncontrados: imoveis.length });
+    const workerRes = await fetch(`${CRAWLER_WORKER_URL}/crawl`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(WORKER_SECRET && { Authorization: `Bearer ${WORKER_SECRET}` }),
+      },
+      body: JSON.stringify({ fonteId: id }),
+    });
+
+    if (!workerRes.ok) {
+      const errorBody = await workerRes.text();
+      console.error(`[crawl] worker respondeu ${workerRes.status}: ${errorBody}`);
+      return NextResponse.json(
+        { error: `Worker erro: ${workerRes.status}` },
+        { status: 502 }
+      );
+    }
+
+    const result = await workerRes.json();
+    console.log(`[crawl] worker aceitou crawl para fonte ${id}:`, result);
+
+    return NextResponse.json({
+      status: "started",
+      fonteId: id,
+      message: "Crawl iniciado no worker. Os imóveis aparecerão progressivamente.",
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Erro desconhecido";
-    await updateFonteStatus(id, "erro", msg);
-    return NextResponse.json({ error: msg }, { status: 500 });
+    console.error(`[crawl] falha ao chamar worker:`, msg);
+    await updateFonteStatus(id, "erro", `Worker indisponível: ${msg}`);
+    return NextResponse.json(
+      { error: `Worker indisponível: ${msg}` },
+      { status: 503 }
+    );
   }
 }

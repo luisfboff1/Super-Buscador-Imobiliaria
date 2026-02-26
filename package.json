@@ -15,9 +15,11 @@
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.31",
+    "@ai-sdk/groq": "^3.0.24",
     "@ai-sdk/openai": "^3.0.33",
     "@ai-sdk/react": "^3.0.102",
     "@auth/drizzle-adapter": "^1.11.1",
+    "@mendable/firecrawl-js": "^4.14.0",
     "@neondatabase/serverless": "^0.10.4",
     "ai": "^6.0.100",
     "bcryptjs": "^3.0.3",

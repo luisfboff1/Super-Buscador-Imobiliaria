@@ -942,7 +942,7 @@ async function parseLLMComCards(cards: string[], baseUrl: string): Promise<Imove
 
     try {
       const { object } = await generateObject({
-        model: openai("gpt-4o-mini"),
+        model: openai.chat("gpt-4o-mini"),
         schema: ImovelSchema,
         prompt: `Você é um extrator de dados de sites de imobiliárias brasileiras.
 Abaixo estão fragmentos HTML de cards de listagem do site ${baseUrl}.
@@ -1032,7 +1032,7 @@ function normalizarHtmlParaLLM(html: string): string {
 async function parseLLMChunk(chunk: string, baseUrl: string): Promise<ImovelInput[]> {
   try {
     const { object } = await generateObject({
-      model: openai("gpt-4o-mini"),
+      model: openai.chat("gpt-4o-mini"),
       schema: ImovelSchema,
       prompt: `Você é um extrator de dados de sites de imobiliárias brasileiras.
 Analise o HTML abaixo e extraia TODOS os imóveis listados na página do site ${baseUrl}.

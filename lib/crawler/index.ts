@@ -213,13 +213,13 @@ async function fetchSitemap(url: string): Promise<string | null> {
   } catch {
     console.log(`[sitemap] Fetch direto timeout/erro, tentando Jina: ${url}`);
   }
-  // Fallback: Jina SEM X-Remove-Selector (que é para HTML, não XML — causa 422 em XML)
+  // Fallback: Jina — pede texto puro para preservar estrutura XML do sitemap
   try {
     const jinaUrl = `https://r.jina.ai/${url}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 60_000);
     const res = await fetch(jinaUrl, {
-      headers: { "Accept": "text/xml, application/xml, text/html", "X-Return-Format": "html" },
+      headers: { "Accept": "text/xml, application/xml, text/plain", "X-Return-Format": "text" },
       signal: controller.signal,
     });
     clearTimeout(timer);
@@ -358,33 +358,54 @@ function deslugify(slug: string): string {
     .replace(/\b\w/g, c => c.toUpperCase());
 }
 
-/** Parseia um <urlset> sitemap XML e extrai <loc> + <image:loc> */
-function parseSitemapUrlset(xml: string, origin: string): SitemapEntry[] {
-  const entries: SitemapEntry[] = [];
-  // Divide por <url> blocks
-  const urlBlocks = xml.split(/<url>/i).slice(1); // skip preamble
+/** Página claramente NÃO é de imóvel */
+const NON_PROPERTY_PATH = /blog|noticias?|news|contato|contact|sobre|about|politica|privacidade|termos|faq|login|cadastr|admin|wp-|feed|category|tag|author|\.css|\.js|\.png|\.jpg|\.svg|\.ico|robots\.txt|sitemap/i;
 
+/** Parseia um <urlset> sitemap XML e extrai <loc> + <image:loc> */
+function parseSitemapUrlset(content: string, origin: string): SitemapEntry[] {
+  const entries: SitemapEntry[] = [];
+  const hostname = new URL(origin).hostname;
+  const seen = new Set<string>();
+
+  // 1. Tentativa XML: divide por <url> blocks e extrai <loc>
+  const urlBlocks = content.split(/<url>/i).slice(1);
   for (const block of urlBlocks) {
     const locMatch = block.match(/<loc>\s*(.*?)\s*<\/loc>/i);
     if (!locMatch) continue;
     const url = locMatch[1].trim();
+    if (seen.has(url)) continue;
 
-    // Filtra: só URLs do mesmo domínio + com path de detalhe
     try {
       const parsed = new URL(url);
-      if (!parsed.origin.includes(new URL(origin).hostname)) continue;
+      if (!parsed.origin.includes(hostname)) continue;
       const path = parsed.pathname;
-      // Deve ter path significativo (não homepage, não /imoveis/ listagem pura)
-      if (path === "/" || path.length < 10) continue;
-      // Deve parecer uma página de detalhe (tem número, ou /imovel/, ou slug longo)
-      if (!/\/\d{2,}|imovel|property|listing|\d+-[a-z]/.test(path)) continue;
+      if (path === "/" || path.length < 5) continue;
+      if (NON_PROPERTY_PATH.test(path)) continue;
     } catch { continue; }
 
-    // Extrai imagem se disponível
+    seen.add(url);
     const imgMatch = block.match(/<image:loc>\s*(.*?)\s*<\/image:loc>/i);
-    const imagem = imgMatch ? imgMatch[1].trim() : undefined;
+    entries.push({ url, imagem: imgMatch ? imgMatch[1].trim() : undefined });
+  }
 
-    entries.push({ url, imagem });
+  // 2. Fallback regex: extrai URLs do conteúdo (Jina pode converter XML → texto/HTML)
+  if (entries.length === 0 && content.length > 100) {
+    console.log(`[sitemap] XML tags não encontradas, tentando extração por regex`);
+    const urlRegex = /https?:\/\/[^\s<>"'\)\]]+/gi;
+    for (const m of content.matchAll(urlRegex)) {
+      let url = m[0].replace(/[.,;:!?\)]+$/, ""); // strip trailing punctuation
+      if (seen.has(url)) continue;
+      try {
+        const parsed = new URL(url);
+        if (!parsed.origin.includes(hostname)) continue;
+        const path = parsed.pathname;
+        if (path === "/" || path.length < 5) continue;
+        if (NON_PROPERTY_PATH.test(path)) continue;
+      } catch { continue; }
+      seen.add(url);
+      entries.push({ url });
+    }
+    console.log(`[sitemap] Regex extraiu ${entries.length} URLs`);
   }
 
   return entries;
@@ -507,7 +528,7 @@ async function identificarUrlListagemViaLLM(
 
   try {
     const { text } = await generateText({
-      model: openai("gpt-4o-mini"),
+      model: openai.chat("gpt-4o-mini"),
       prompt: `Você é um assistente analisando o menu de navegação de um site de imobiliária brasileira.
 
 Site: ${baseUrl}
@@ -598,8 +619,8 @@ async function resolverUrlListagem(baseUrl: string): Promise<string> {
 
 // ─── Enriquecimento via páginas de detalhe ───────────────────────────────────
 
-// Gemini Flash: 15 RPM free tier → 5 concurrent para margem de segurança
-const LLM_CONCURRENCY = 5;
+// gpt-4o-mini: 200k TPM, 500 RPM (Tier 1) → concurrency 10 tranquilamente
+const LLM_CONCURRENCY = 10;
 const DETAIL_TIMEOUT_MS = 10_000;
 const DETAIL_MAX_TIME_MS = 240_000; // 4 min budget para enriquecimento
 
@@ -607,36 +628,30 @@ const DETAIL_MAX_TIME_MS = 240_000; // 4 min budget para enriquecimento
  * Enriquece imóveis buscando suas páginas de detalhe.
  *
  * Estratégia em 2 camadas:
- * 1. LLM (Jina Markdown → Gemini Flash) — universal, entende qualquer site
+ * 1. LLM (Jina Markdown → gpt-4o-mini) — universal, entende qualquer site
  * 2. Fallback: parseDetailPage (CSS heurístico) — se LLM falhar ou env var ausente
- *
- * Concurrency limitada a 5 para respeitar Gemini Flash free tier (15 RPM).
  */
 async function enriquecerComDetalhes(imoveis: ImovelInput[]): Promise<void> {
-  // Filtra itens que precisam de enriquecimento (sem preço OU sem quartos OU sem bairro)
   const precisam = imoveis.filter(i => !i.preco || !i.quartos || !i.bairro);
   if (precisam.length === 0) {
     console.log(`[enrich] Todos os imóveis já têm preço/quartos/bairro — pulando enriquecimento`);
     return;
   }
 
-  const usarLLM = !!process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+  const usarLLM = !!process.env.OPENAI_API_KEY;
   if (!usarLLM) {
-    console.warn(`[enrich] GOOGLE_GENERATIVE_AI_API_KEY não configurada — usando apenas fallback heurístico`);
+    console.warn(`[enrich] OPENAI_API_KEY não configurada — usando apenas fallback heurístico`);
   }
 
-  // Limita a 200 itens para não demorar demais
   const aEnriquecer = precisam.slice(0, 200);
-  console.log(`[enrich] ${aEnriquecer.length}/${imoveis.length} imóveis incompletos — modo: ${usarLLM ? 'LLM (Gemini Flash)' : 'heurístico'}`);
+  console.log(`[enrich] ${aEnriquecer.length}/${imoveis.length} imóveis incompletos — modo: ${usarLLM ? 'LLM (gpt-4o-mini)' : 'heurístico'}`);
   const startTime = Date.now();
   let enriched = 0;
   let processed = 0;
   let errors = 0;
   const concurrency = usarLLM ? LLM_CONCURRENCY : 10;
 
-  // Processa em batches
   for (let i = 0; i < aEnriquecer.length; i += concurrency) {
-    // Verifica time budget
     if (Date.now() - startTime > DETAIL_MAX_TIME_MS) {
       console.log(`[enrich] Time budget esgotado (${Math.round((Date.now() - startTime) / 1000)}s) — ${processed} processados, ${enriched} enriquecidos`);
       break;
@@ -649,7 +664,6 @@ async function enriquecerComDetalhes(imoveis: ImovelInput[]): Promise<void> {
           let details: Partial<ImovelInput>;
 
           if (usarLLM) {
-            // Camada 1: LLM (Jina Markdown → Gemini Flash)
             details = await extrairDadosViaLLM(item.urlAnuncio);
           } else {
             // Fallback: fetch direto + parseDetailPage heurístico

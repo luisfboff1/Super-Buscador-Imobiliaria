@@ -60,3 +60,4 @@ coverage/
 *.pem
 *.key
 *.cert
+/WEB scraper need implementação para pegar corretamente o texto

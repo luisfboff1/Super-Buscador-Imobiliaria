@@ -1,9 +1,9 @@
 /**
- * Extrator universal de dados de imóveis via LLM (Gemini Flash).
+ * Extrator universal de dados de imóveis via LLM (OpenAI gpt-4o-mini).
  *
  * Fluxo:
  * 1. Busca a página via Jina AI em modo Markdown (limpo, sem HTML)
- * 2. Envia o markdown para Gemini 2.0 Flash via AI SDK generateObject()
+ * 2. Envia o markdown para gpt-4o-mini via AI SDK generateObject()
  * 3. Retorna dados estruturados validados por Zod schema
  *
  * Benefícios vs parseDetailPage (CSS heurístico):
@@ -11,22 +11,23 @@
  * - Entende contexto semântico (ex: "3 dorms" → quartos: 3)
  * - Não quebra com mudanças de layout
  *
- * Custos: Gemini Flash é gratuito (15 RPM / 1M tokens/min)
+ * Custos: gpt-4o-mini (~$0.15/1M input, $0.60/1M output) ≈ R$0,05 por crawl de 200 imóveis
+ * Rate limits: 200k TPM, 500 RPM (Tier 1)
  */
 
 import { generateObject } from "ai";
-import { google } from "@ai-sdk/google";
+import { openai } from "@ai-sdk/openai";
 import { z } from "zod";
 import type { ImovelInput } from "@/lib/db/queries";
 import { parseDetailPage } from "@/lib/crawler/parsers/generic";
 
 // ─── Zod schema para extração estruturada ─────────────────────────────────────
+// OpenAI json_schema exige todos os campos como required — usamos nullable sem optional
 
 const ImovelSchema = z.object({
   titulo: z
     .string()
     .nullable()
-    .optional()
     .describe("Título ou nome do anúncio do imóvel"),
   tipo: z
     .enum([
@@ -46,57 +47,47 @@ const ImovelSchema = z.object({
       "outro",
     ])
     .nullable()
-    .optional()
     .describe("Tipo do imóvel"),
   cidade: z
     .string()
     .nullable()
-    .optional()
     .describe("Cidade onde o imóvel está localizado"),
   bairro: z
     .string()
     .nullable()
-    .optional()
     .describe("Bairro onde o imóvel está localizado"),
   estado: z
     .string()
     .nullable()
-    .optional()
     .describe("Sigla do estado (ex: RS, SP, SC). Sempre 2 letras maiúsculas."),
   preco: z
     .number()
     .nullable()
-    .optional()
     .describe(
       "Preço de venda do imóvel em reais (apenas número, sem centavos). Se houver mais de um valor, use o de VENDA."
     ),
   areaM2: z
     .number()
     .nullable()
-    .optional()
     .describe("Área do imóvel em metros quadrados"),
   quartos: z
     .number()
     .int()
     .nullable()
-    .optional()
     .describe("Número de quartos/dormitórios"),
   banheiros: z
     .number()
     .int()
     .nullable()
-    .optional()
     .describe("Número de banheiros"),
   vagas: z
     .number()
     .int()
     .nullable()
-    .optional()
     .describe("Número de vagas de garagem/estacionamento"),
   descricao: z
     .string()
     .nullable()
-    .optional()
     .describe("Descrição do imóvel (máximo 500 caracteres)"),
 });
 
@@ -158,9 +149,9 @@ Regras:
 - Descrição: limite a 500 caracteres, resumindo se necessário.`;
 
 /**
- * Extrai dados de um imóvel via LLM (Gemini Flash).
+ * Extrai dados de um imóvel via LLM (OpenAI gpt-4o-mini).
  *
- * Fluxo: Jina Markdown → Gemini Flash → Zod validated object
+ * Fluxo: Jina Markdown → gpt-4o-mini → Zod validated object
  * Fallback: parseDetailPage (heurístico CSS) se LLM falhar
  */
 export async function extrairDadosViaLLM(
@@ -170,21 +161,20 @@ export async function extrairDadosViaLLM(
   // 1. Busca markdown via Jina
   const markdown = await fetchMarkdownViaJina(url);
 
-  if (!markdown || markdown.length < 100) {
+  if (!markdown || markdown.length < 200) {
     console.warn(
-      `[llm-extract] Markdown insuficiente para ${url} (${markdown?.length ?? 0} chars) — fallback heurístico`
+      `[llm-extract] Markdown insuficiente para ${url} (${markdown?.length ?? 0} chars) — pulando LLM`
     );
-    // Fallback: tenta parse heurístico se temos HTML
     if (htmlFallback) {
       return parseDetailPage(htmlFallback, url);
     }
     return {};
   }
 
-  // 2. Extrai via Gemini Flash
+  // 2. Extrai via gpt-4o-mini (Chat Completions — /v1/chat/completions)
   try {
     const { object } = await generateObject({
-      model: google("gemini-2.0-flash"),
+      model: openai.chat("gpt-4o-mini"),
       schema: ImovelSchema,
       system: SYSTEM_PROMPT,
       prompt: `Extraia os dados do imóvel desta página:\n\nURL: ${url}\n\n${markdown}`,
@@ -193,7 +183,6 @@ export async function extrairDadosViaLLM(
 
     const result: Partial<ImovelInput> = {};
 
-    // Mapeia campos extraídos (ignora nulls/undefined)
     if (object.titulo) result.titulo = object.titulo;
     if (object.tipo) result.tipo = object.tipo;
     if (object.cidade) result.cidade = object.cidade;
@@ -209,14 +198,13 @@ export async function extrairDadosViaLLM(
 
     const fieldsFound = Object.keys(result).length;
     console.log(
-      `[llm-extract] Gemini OK: ${url} → ${fieldsFound} campos extraídos`
+      `[llm-extract] OK: ${url} → ${fieldsFound} campos extraídos`
     );
 
     return result;
   } catch (err) {
-    console.error(`[llm-extract] Gemini falhou para ${url}:`, err);
+    console.error(`[llm-extract] Falhou para ${url}:`, err);
 
-    // Fallback: parse heurístico
     if (htmlFallback) {
       console.log(`[llm-extract] Usando fallback heurístico para ${url}`);
       return parseDetailPage(htmlFallback, url);
