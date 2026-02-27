@@ -1,0 +1,19 @@
+# Web scraping
+scrapling[fetchers]==0.4.1
+
+# Web server
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+
+# Database
+psycopg2-binary==2.9.10
+
+# LLM extraction (Groq - free tier)
+groq==0.25.0
+
+# HTML parsing (fallback + images)
+beautifulsoup4==4.13.3
+lxml==5.3.1
+
+# Env
+python-dotenv==1.1.0
