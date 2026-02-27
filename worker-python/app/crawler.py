@@ -63,15 +63,8 @@ LISTING_PATH_PATTERNS = [
         r"/(comprar|venda|alugar|aluguel)/(cidade|bairro|tipo|regiao)/",
         # /comprar  /venda  /alugar  (raiz de listagem, sem slug de imóvel)
         r"^/(comprar|venda|alugar|aluguel)/?$",
-    ]
-]
-
-RENTAL_URL_PATTERNS = [
-    re.compile(p, re.I) for p in [
-        r"alug(ar|uel)",
-        r"locac(ao|ão)",
-        r"para[_-]?alug",
-        r"[?&]finalidade=alug",
+        # /imoveis/comprar  /imoveis/alugar  (listagem com prefixo /imoveis/)
+        r"^/imoveis/(comprar|venda|alugar|aluguel)/?$",
     ]
 ]
 
@@ -90,8 +83,6 @@ def is_detail_page_url(url: str, base_hostname: str) -> bool:
         return False
 
     if any(p.search(url) for p in SKIP_URL_PATTERNS):
-        return False
-    if any(p.search(url) for p in RENTAL_URL_PATTERNS):
         return False
     # Páginas de listagem por cidade/tipo NÃO são detalhe
     if any(p.search(path) for p in LISTING_PATH_PATTERNS):
@@ -199,12 +190,21 @@ def extract_detail_links(page, base_hostname: str) -> list[str]:
 
 # Fallback — tentamos esses se o LLM não achar nada
 LISTING_CANDIDATES_SUFFIXES = [
-    "/imoveis/venda",
+    # Venda
     "/imoveis/comprar",
+    "/imoveis/venda",
     "/comprar",
     "/venda",
     "/imoveis?finalidade=venda",
     "/imoveis?tipo=venda",
+    # Aluguel
+    "/imoveis/alugar",
+    "/imoveis/aluguel",
+    "/alugar",
+    "/aluguel",
+    "/imoveis?finalidade=aluguel",
+    "/imoveis?tipo=aluguel",
+    # Genérico
     "/imoveis",
 ]
 
@@ -215,11 +215,28 @@ PAGINATION_PATTERNS_PAGE2 = [
 ]
 
 
-def _llm_find_listing_url(html: str, site_url: str, on_progress: Optional[Callable] = None) -> Optional[str]:
+def _llm_analyze_site(html: str, site_url: str, on_progress: Optional[Callable] = None) -> Optional[dict]:
     """
-    Usa LLM para analisar a homepage e descobrir a URL de listagem de imóveis à venda.
-    Cada site tem uma estrutura diferente — o LLM entende o contexto.
+    Usa LLM para analisar a homepage e retornar insights estruturados sobre o site:
+    - URLs de listagem de venda e aluguel
+    - Padrão de paginação
+    - Observações sobre a estrutura
+    
+    Retorna dict com:
+    {
+      "listagens": [
+        {"url": "...", "tipo": "venda|aluguel|ambos", "descricao": "..."},
+        ...
+      ],
+      "paginacao": {
+        "tipo": "query_param|path_segment|nenhuma",
+        "parametro": "page",
+        "exemplo_pagina2": "https://site.com/imoveis/comprar?page=2"
+      },
+      "observacoes": "..."
+    }
     """
+    import json as json_mod
     from bs4 import BeautifulSoup
 
     progress = on_progress or log.info
@@ -240,56 +257,101 @@ def _llm_find_listing_url(html: str, site_url: str, on_progress: Optional[Callab
         seen_hrefs.add(href)
 
         text = a.get_text(strip=True)[:80]
-        if text or any(kw in href.lower() for kw in ["imov", "comprar", "venda", "alug"]):
+        if text or any(kw in href.lower() for kw in ["imov", "comprar", "venda", "alug", "locacao", "page", "pagina"]):
             links_info.append(f"- {href}  ({text})")
 
     if not links_info:
         return None
 
     # Limitar para não exceder tokens
-    links_text = "\n".join(links_info[:100])
+    links_text = "\n".join(links_info[:120])
 
-    prompt = f"""Analise os links desta homepage de um site imobiliário e identifique a URL principal
-que lista imóveis À VENDA (não aluguel).
+    prompt = f"""Analise os links desta homepage de um site imobiliário brasileiro.
+Quero entender a ESTRUTURA do site para fazer crawling automático.
 
 Site: {site_url}
 
-Links encontrados:
+Links encontrados na homepage:
 {links_text}
 
+Retorne um JSON com esta estrutura EXATA (sem markdown, sem explicação, SOMENTE o JSON):
+{{
+  "listagens": [
+    {{
+      "url": "URL completa da página de listagem",
+      "tipo": "venda ou aluguel ou ambos",
+      "descricao": "breve descrição do que é esta listagem"
+    }}
+  ],
+  "paginacao": {{
+    "tipo": "query_param ou path_segment ou nenhuma",
+    "parametro": "nome do parâmetro (ex: page, pagina, pag) ou null",
+    "exemplo_pagina2": "URL completa da página 2 da primeira listagem, ou null"
+  }},
+  "observacoes": "qualquer insight útil sobre a estrutura do site"
+}}
+
 REGRAS:
-- Retorne SOMENTE a URL completa (uma única linha, nada mais).
-- Escolha a URL que mostra a LISTAGEM de imóveis à venda (não um imóvel específico).
-- Prefira URLs com "comprar", "venda", "imoveis" no path.
-- Se houver filtro por cidade, escolha o mais genérico possível.
-- Se nenhuma URL parece ser uma listagem de venda, retorne "NONE".
+- Identifique TODAS as listagens: venda E aluguel, se existirem.
+- Use URLs que mostram o CATÁLOGO/LISTAGEM de imóveis (não um imóvel específico).
+- Prefira URLs genéricas (sem filtro de cidade/bairro específico).
+- Para paginação: analise os links e tente deduzir o padrão.
+  Ex: se existe /imoveis/comprar, a pág 2 provavelmente é /imoveis/comprar?page=2
+- Se não houver listagens visíveis, retorne listagens como array vazio.
+- Retorne SOMENTE o JSON válido, nada mais.
 """
 
     try:
         from app.extractor import _llm_chat
         answer = _llm_chat(
             messages=[
-                {"role": "system", "content": "Você é um assistente que analisa sites imobiliários. Responda SOMENTE com a URL, sem explicação."},
+                {"role": "system", "content": "Você é um especialista em análise de sites imobiliários brasileiros. Retorne SOMENTE JSON válido, sem markdown."},
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=200,
+            max_tokens=500,
         )
 
         if not answer:
-            progress(f"  LLM não retornou resposta")
+            progress("  LLM não retornou resposta")
             return None
 
-        answer = answer.strip('"\'` \n')
+        # Limpar resposta: remover markdown code blocks se existirem
+        answer = answer.strip()
+        if answer.startswith("```"):
+            answer = re.sub(r"^```(?:json)?\s*", "", answer)
+            answer = re.sub(r"\s*```$", "", answer)
+        answer = answer.strip()
 
-        if "NONE" in answer.upper() or not answer.startswith("http"):
-            progress(f"  LLM não encontrou listagem de venda")
-            return None
+        result = json_mod.loads(answer)
 
-        progress(f"  🤖 LLM identificou listagem: {answer}")
-        return answer
+        # Log dos insights
+        listagens = result.get("listagens", [])
+        paginacao = result.get("paginacao", {})
+        obs = result.get("observacoes", "")
 
+        progress(f"  🤖 LLM analisou o site:")
+        for lst in listagens:
+            progress(f"    📋 {lst.get('tipo', '?').upper()}: {lst.get('url', '?')}")
+            if lst.get("descricao"):
+                progress(f"       {lst['descricao']}")
+
+        pag_tipo = paginacao.get("tipo", "nenhuma")
+        pag_param = paginacao.get("parametro", "-")
+        pag_ex = paginacao.get("exemplo_pagina2", "-")
+        progress(f"    📄 Paginação: {pag_tipo} (param={pag_param})")
+        if pag_ex and pag_ex != "null":
+            progress(f"       Ex pág 2: {pag_ex}")
+        if obs:
+            progress(f"    💡 {obs}")
+
+        return result
+
+    except json_mod.JSONDecodeError as e:
+        log.warning(f"LLM retornou JSON inválido: {e}")
+        # Tentar extrair URLs mesmo do texto mal-formatado
+        return None
     except Exception as e:
-        log.warning(f"LLM discovery falhou: {e}")
+        log.warning(f"LLM site analysis falhou: {e}")
         return None
 
 
@@ -298,11 +360,12 @@ def discover_property_urls(
     on_progress: Optional[Callable[[str], None]] = None,
 ) -> list[str]:
     """
-    Descobre todas as URLs de imóveis à venda de um site imobiliário.
+    Descobre todas as URLs de imóveis de um site imobiliário (venda + aluguel).
     
-    1. Usa LLM para entender a homepage e encontrar a listagem de venda
+    1. Usa LLM para analisar a homepage → retorna insights estruturados
+       (listagens encontradas, padrão de paginação, observações)
     2. Fallback: testa URLs comuns (hardcoded)
-    3. Detecta paginação (query param OU path-based)
+    3. Usa paginação do LLM OU detecta automaticamente
     4. Navega todas as páginas coletando links de detalhe
     """
     progress = on_progress or log.info
@@ -310,17 +373,17 @@ def discover_property_urls(
     base_hostname = urlparse(site_url).hostname or ""
     all_detail_urls: set[str] = set()
 
-    # ── 1. Encontrar a melhor URL de listagem ────────────────────────────────
+    # ── 1. Analisar o site com LLM ──────────────────────────────────────────
     progress(f"{'─'*50}")
-    progress(f"FASE 1: Procurando listagem de venda (LLM + fallback)")
+    progress(f"FASE 1: Analisando estrutura do site (LLM)")
     progress(f"Site: {base_url}")
     progress(f"{'─'*50}")
 
-    best_url: Optional[str] = None
-    best_count = 0
+    listing_urls: list[str] = []  # URLs de listagem confirmadas
+    llm_pagination_hint: Optional[dict] = None  # Dica de paginação do LLM
     used_stealth = False
 
-    # 1a. Fetch homepage e pedir LLM para encontrar a listagem
+    # 1a. Fetch homepage e pedir LLM para analisar
     progress(f"  Buscando homepage: {base_url}")
     homepage = fetch_page(base_url, stealth=False)
     if homepage and not has_real_content(homepage):
@@ -332,23 +395,35 @@ def discover_property_urls(
     if homepage:
         homepage_html = safe_html(homepage)
 
-        # Perguntar ao LLM qual é a URL de listagem
-        progress(f"  🤖 Perguntando ao LLM qual é a listagem de venda...")
-        llm_listing_url = _llm_find_listing_url(homepage_html, site_url, on_progress=progress)
+        # Pedir análise completa ao LLM
+        progress(f"  🤖 Pedindo análise do site ao LLM...")
+        site_analysis = _llm_analyze_site(homepage_html, site_url, on_progress=progress)
 
-        if llm_listing_url:
-            # Testar a URL que o LLM sugeriu
-            progress(f"  Testando URL do LLM: {llm_listing_url}")
-            llm_page = fetch_page(llm_listing_url, stealth=used_stealth)
-            if llm_page:
-                links = extract_detail_links(llm_page, base_hostname)
-                progress(f"  ↳ {len(links)} imóveis encontrados")
-                if len(links) >= 1:
-                    best_url = llm_listing_url
-                    best_count = len(links)
+        if site_analysis:
+            # Extrair paginação hint
+            llm_pagination_hint = site_analysis.get("paginacao")
 
-    # 1b. Fallback: tentar URLs hardcoded se LLM não achou
-    if not best_url or best_count < 3:
+            # Testar cada listagem que o LLM identificou
+            for lst in site_analysis.get("listagens", []):
+                llm_url = lst.get("url", "").strip()
+                lst_tipo = lst.get("tipo", "?")
+                if not llm_url or not llm_url.startswith("http"):
+                    continue
+
+                progress(f"  Testando listagem ({lst_tipo}): {llm_url}")
+                llm_page = fetch_page(llm_url, stealth=used_stealth)
+                if llm_page:
+                    links = extract_detail_links(llm_page, base_hostname)
+                    progress(f"  ↳ {len(links)} imóveis encontrados")
+                    if len(links) >= 1:
+                        listing_urls.append(llm_url)
+                    else:
+                        progress(f"  ↳ 0 imóveis, descartando")
+                else:
+                    progress(f"  ↳ Sem resposta")
+
+    # 1b. Fallback: tentar URLs hardcoded se LLM não achou nada
+    if not listing_urls:
         progress(f"  Fallback: testando URLs comuns...")
         for suffix in LISTING_CANDIDATES_SUFFIXES:
             candidate = f"{base_url}{suffix}"
@@ -366,71 +441,132 @@ def discover_property_urls(
             links = extract_detail_links(page, base_hostname)
             progress(f"    ↳ {len(links)} imóveis")
 
-            if len(links) > best_count:
-                best_count = len(links)
-                best_url = candidate
+            if len(links) >= 1:
+                listing_urls.append(candidate)
 
-            if len(links) >= 5:
-                break
+    # Deduplicate listing URLs
+    listing_urls = list(dict.fromkeys(listing_urls))
 
-    if not best_url or best_count < 1:
-        progress("✗ Nenhuma listagem de venda encontrada")
+    if not listing_urls:
+        progress("✗ Nenhuma listagem encontrada")
         return []
 
-    progress(f"✓ Melhor listagem: {best_url} ({best_count} imóveis na pág 1)")
+    progress(f"✓ {len(listing_urls)} listagem(s) confirmada(s):")
+    for u in listing_urls:
+        progress(f"  • {u}")
 
-    # ── 2. Paginação ─────────────────────────────────────────────────────────
+    # ── 2. Paginação de cada listagem ────────────────────────────────────────
     progress(f"\n{'─'*50}")
     progress(f"FASE 2: Paginação")
     progress(f"{'─'*50}")
 
-    page = fetch_page(best_url, stealth=used_stealth)
-    if page:
-        for link in extract_detail_links(page, base_hostname):
-            all_detail_urls.add(link)
+    for listing_idx, listing_url in enumerate(listing_urls, 1):
+        progress(f"\n  📂 Listagem {listing_idx}/{len(listing_urls)}: {listing_url}")
 
-    # Detectar paginação
-    page2_url = _detect_page2_url(page, best_url, base_hostname)
-
-    if not page2_url:
-        progress(f"  Sem paginação detectada — {len(all_detail_urls)} imóveis total")
-        return list(all_detail_urls)
-
-    # Converter URL da pág 2 em template
-    template = _url_to_template(page2_url)
-    if template:
-        progress(f"  Template de paginação: {template}")
-    else:
-        progress(f"  Paginação detectada mas sem template — parando")
-        return list(all_detail_urls)
-
-    # ── 3. Navegar todas as páginas ──────────────────────────────────────────
-    empty_pages = 0
-    page_num = 2
-
-    while page_num <= MAX_PAGES and empty_pages < 2:
-        page_url = template.replace("{N}", str(page_num))
-
-        page = fetch_page(page_url, stealth=used_stealth)
+        page = fetch_page(listing_url, stealth=used_stealth)
         if not page:
-            progress(f"  Pág {page_num}: ✗ sem resposta, parando")
-            break
+            progress(f"    ✗ Sem resposta")
+            continue
 
-        links = extract_detail_links(page, base_hostname)
-        new_links = [l for l in links if l not in all_detail_urls]
+        page1_links = extract_detail_links(page, base_hostname)
+        before_count = len(all_detail_urls)
+        for link in page1_links:
+            all_detail_urls.add(link)
+        new_p1 = len(all_detail_urls) - before_count
+        progress(f"    Pág 1: +{new_p1} novos (total: {len(all_detail_urls)})")
 
-        if not new_links:
-            empty_pages += 1
-            progress(f"  Pág {page_num}: 0 novos ({empty_pages}/2 vazias)")
+        # Detectar paginação: primeiro tenta com hint do LLM, depois detecção auto
+        page2_url = None
+
+        # 2a. LLM hint: usar a URL de exemplo de paginação
+        if llm_pagination_hint and listing_idx == 1:
+            hint_page2 = llm_pagination_hint.get("exemplo_pagina2")
+            hint_tipo = llm_pagination_hint.get("tipo", "nenhuma")
+            hint_param = llm_pagination_hint.get("parametro")
+
+            if hint_page2 and hint_page2 != "null" and hint_page2.startswith("http"):
+                progress(f"    🤖 Testando paginação do LLM: {hint_page2}")
+                p2 = fetch_page(hint_page2, stealth=used_stealth)
+                if p2:
+                    p2_links = extract_detail_links(p2, base_hostname)
+                    if p2_links:
+                        progress(f"    ✓ Paginação LLM funcionou: {len(p2_links)} imóveis na pág 2")
+                        page2_url = hint_page2
+                    else:
+                        progress(f"    ✗ Paginação LLM sem imóveis")
+                else:
+                    progress(f"    ✗ Paginação LLM sem resposta")
+
+            # Se o LLM deu o parâmetro mas não a URL exata, construir
+            if not page2_url and hint_param and hint_tipo == "query_param":
+                constructed = f"{listing_url}?{hint_param}=2"
+                # Se listing_url já tem query params, usar &
+                if "?" in listing_url:
+                    constructed = f"{listing_url}&{hint_param}=2"
+                progress(f"    🤖 Construindo paginação com param do LLM: {constructed}")
+                p2 = fetch_page(constructed, stealth=used_stealth)
+                if p2:
+                    p2_links = extract_detail_links(p2, base_hostname)
+                    if p2_links:
+                        progress(f"    ✓ Paginação construída funcionou: {len(p2_links)} imóveis")
+                        page2_url = constructed
+        
+        # 2b. Detecção automática (fallback se LLM hint não funcionou)
+        if not page2_url:
+            page2_url = _detect_page2_url(page, listing_url, base_hostname)
+
+        if not page2_url:
+            progress(f"    Sem paginação detectada")
+            continue
+
+        # Converter URL da pág 2 em template
+        template = _url_to_template(page2_url)
+        if template:
+            progress(f"    Template: {template}")
         else:
-            empty_pages = 0
-            for l in links:
-                all_detail_urls.add(l)
-            progress(f"  Pág {page_num}: +{len(new_links)} novos (total: {len(all_detail_urls)})")
+            progress(f"    Paginação detectada mas sem template")
+            continue
 
-        page_num += 1
+        # Navegar todas as páginas
+        empty_pages = 0
+        page_num = 2
 
-    progress(f"\n✓ Descoberta concluída: {len(all_detail_urls)} URLs em {page_num - 1} páginas")
+        while page_num <= MAX_PAGES and empty_pages < 2:
+            page_url = template.replace("{N}", str(page_num))
+
+            page = fetch_page(page_url, stealth=used_stealth)
+            if not page:
+                progress(f"    Pág {page_num}: ✗ sem resposta, parando")
+                break
+
+            links = extract_detail_links(page, base_hostname)
+            new_links = [l for l in links if l not in all_detail_urls]
+
+            if not new_links:
+                empty_pages += 1
+                progress(f"    Pág {page_num}: 0 novos ({empty_pages}/2 vazias)")
+            else:
+                empty_pages = 0
+                for l in links:
+                    all_detail_urls.add(l)
+                progress(f"    Pág {page_num}: +{len(new_links)} novos (total: {len(all_detail_urls)})")
+
+            page_num += 1
+
+        # Para as listagens subsequentes, aplicar hint de paginação baseado no param
+        # Ex: se /comprar?page=2 funcionou, /alugar?page=2 provavelmente também
+        if llm_pagination_hint and page2_url and listing_idx == 1:
+            # Extrair o padrão de paginação que funcionou
+            _detected_param = None
+            for param in ["page", "pagina", "pag", "pg"]:
+                if f"{param}=2" in page2_url:
+                    _detected_param = param
+                    break
+            if _detected_param and not llm_pagination_hint.get("parametro"):
+                llm_pagination_hint["parametro"] = _detected_param
+                llm_pagination_hint["tipo"] = "query_param"
+
+    progress(f"\n✓ Descoberta concluída: {len(all_detail_urls)} URLs")
     return list(all_detail_urls)
 
 
