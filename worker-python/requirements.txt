@@ -13,7 +13,7 @@ groq==0.25.0
 
 # HTML parsing (fallback + images)
 beautifulsoup4==4.13.3
-lxml==5.3.1
+lxml>=6.0.2
 
 # Env
 python-dotenv==1.1.0
