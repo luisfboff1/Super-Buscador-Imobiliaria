@@ -137,6 +137,10 @@ export async function discoverPropertyUrls(
           const links = await extractDetailLinks(p, baseHostname);
           log(`[crawler]   → ${links.length} imóveis encontrados`);
           if (links.length > bestCount) { bestCount = links.length; bestUrl = candidate; }
+          // Preferir URL de listagem específica (não homepage) com ao menos 5 links
+          // A homepage mistura tipos e não tem paginação — usar só como último recurso
+          if (links.length >= 5 && candidate !== baseUrl) break;
+          // Homepage com muitos links também é aceitável
           if (links.length >= 30) break;
         } catch { continue; }
       }
@@ -194,6 +198,26 @@ export async function discoverPropertyUrls(
     ];
     for (const [pat, rep] of patternMap) {
       if (pat.test(rawPage2Url)) { template = rawPage2Url.replace(pat, rep); break; }
+    }
+  }
+
+  // Se não detectou via link explícito, probar padrões comuns diretamente
+  if (!template) {
+    const probePatterns = [
+      `${bestUrl}/pagina/{N}`,
+      `${bestUrl}/page/{N}`,
+      `${bestUrl}?pagina={N}`,
+      `${bestUrl}?page={N}`,
+      `${bestUrl}?pag={N}`,
+    ];
+    for (const pattern of probePatterns) {
+      const page2 = pattern.replace("{N}", "2");
+      const links = await fetchPageLinks(page2);
+      if (links.length > 0) {
+        template = pattern;
+        log(`[crawler] ✓ template detectado por probe: ${template}`);
+        break;
+      }
     }
   }
 
