@@ -23,10 +23,35 @@ log = get_logger("db")
 _pool: Optional[PgConnection] = None
 
 
+def _is_alive(conn: PgConnection) -> bool:
+    """Testa se a conexão ainda está viva (SELECT 1)."""
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        cur.close()
+        return True
+    except Exception:
+        return False
+
+
 def get_conn() -> PgConnection:
-    """Retorna conexão reutilizável ao Postgres (Neon)."""
+    """Retorna conexão reutilizável ao Postgres (Neon).
+    
+    Reconecta automaticamente se a conexão SSL foi fechada pelo servidor
+    (comum com Neon após idle timeout).
+    """
     global _pool
-    if _pool is None or _pool.closed:
+    need_new = _pool is None or _pool.closed
+    if not need_new:
+        # Conexão existe mas pode estar morta (SSL closed)
+        if not _is_alive(_pool):
+            log.warning("Conexão PostgreSQL perdida (SSL idle), reconectando...")
+            try:
+                _pool.close()
+            except Exception:
+                pass
+            need_new = True
+    if need_new:
         database_url = os.environ["DATABASE_URL"]
         log.info("Conectando ao PostgreSQL...")
         _pool = psycopg2.connect(database_url, sslmode="require")
@@ -37,13 +62,29 @@ def get_conn() -> PgConnection:
 
 @contextmanager
 def cursor():
-    """Context manager para cursor com auto-close."""
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    """Context manager para cursor com auto-close e retry em falha de conexão."""
     try:
-        yield cur
-    finally:
-        cur.close()
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            yield cur
+        finally:
+            cur.close()
+    except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+        # Conexão morreu durante uso — forçar reconexão e retry 1x
+        log.warning(f"Erro de conexão durante query, reconectando: {e}")
+        global _pool
+        try:
+            _pool.close()
+        except Exception:
+            pass
+        _pool = None
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            yield cur
+        finally:
+            cur.close()
 
 
 def test_connection() -> bool:
