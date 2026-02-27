@@ -26,7 +26,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.logger import setup_logging, get_logger
-from app.db import get_fonte_by_id, update_fonte_status, test_connection
+from app.db import get_fonte_by_id, update_fonte_status, update_crawl_progress, test_connection
 from app.crawler import execute_crawl, CrawlStats
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
@@ -222,6 +222,15 @@ def _run_crawl_background(fonte_id: str) -> None:
 
         try:
             update_fonte_status(fonte_id, "erro", error_msg)
+            update_crawl_progress(fonte_id, {
+                "fase": "erro",
+                "message": f"Erro: {error_msg[:200]}",
+                "done": 0, "total": 0, "pct": 0,
+                "enriched": 0, "failed": 0,
+                "elapsed": f"{elapsed:.1f}s",
+                "logs": [],
+                "finished": True,
+            })
         except Exception:
             pass
 
@@ -247,8 +256,14 @@ async def startup():
     log.info(f"   Secret: {'configurado' if WORKER_SECRET else 'NENHUM (dev mode)'}")
     log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-    # Teste de conexão DB
-    test_connection()
+    # Teste de conexão DB — em background para não bloquear healthcheck
+    def _test_db():
+        try:
+            test_connection()
+        except Exception as e:
+            log.warning(f"DB conexão adiada: {e}")
+
+    threading.Thread(target=_test_db, daemon=True).start()
 
     log.info("✓ Worker pronto para receber crawls")
 

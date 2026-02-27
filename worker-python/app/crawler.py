@@ -645,21 +645,44 @@ def execute_crawl(
     
     Retorna CrawlStats com métricas.
     """
-    from app.db import upsert_imoveis, mark_imoveis_indisponiveis
+    from app.db import upsert_imoveis, mark_imoveis_indisponiveis, update_crawl_progress
 
     progress = on_progress or log.info
     stats = CrawlStats()
+
+    def _push_progress(fase: str, message: str, done: int = 0, total: int = 0, logs: list[str] | None = None, finished: bool = False):
+        """Escreve progresso no banco para o frontend pollinar."""
+        try:
+            update_crawl_progress(fonte_id, {
+                "fase": fase,
+                "message": message,
+                "done": done,
+                "total": total,
+                "pct": round((done / total * 100) if total > 0 else 0),
+                "enriched": stats.enriched,
+                "failed": stats.failed,
+                "elapsed": stats.elapsed_str,
+                "logs": (logs or [])[-8:],  # últimas 8 entradas
+                "finished": finished,
+            })
+        except Exception as e:
+            log.warning(f"Falha ao salvar progresso: {e}")
+
+    recent_logs: list[str] = []
 
     # ── FASE 1: Descoberta ────────────────────────────
     progress(f"\n{'='*60}")
     progress(f"CRAWL INICIADO — {site_url}")
     progress(f"{'='*60}")
 
+    _push_progress("descoberta", "Buscando URLs de imóveis...", 0, 0)
+
     urls = discover_property_urls(site_url, on_progress=progress)
     stats.urls_found = len(urls)
 
     if not urls:
         progress("Nenhum imóvel encontrado — finalizando")
+        _push_progress("concluido", "Nenhum imóvel encontrado", 0, 0, finished=True)
         return stats
 
     # ── FASE 2: Enriquecimento (só salva quem tem dados) ──────────
@@ -680,6 +703,8 @@ def execute_crawl(
     progress(f"Concorrência: {CONCURRENCY}")
     progress(f"{'─'*50}")
 
+    _push_progress("descoberta", f"{stats.urls_found} URLs encontradas. Iniciando enriquecimento...", 0, total)
+
     for i in range(0, total, CONCURRENCY):
         batch = urls_to_enrich[i : i + CONCURRENCY]
         batch_num = (i // CONCURRENCY) + 1
@@ -695,6 +720,9 @@ def execute_crawl(
                 if data:
                     stats.enriched += 1
                     enriched_urls.append(url)
+                    # Log line para o frontend
+                    label = f"{data.tipo or '?'} — {('R$' + str(int(data.preco))) if data.preco else 's/preço'} — {data.bairro or data.cidade or '?'}"
+                    recent_logs.append(f"✓ {label}")
                     # Classificar qualidade: preço + tipo + localização = completo
                     has_preco = data.preco is not None and data.preco > 0
                     has_tipo = bool(data.tipo)
@@ -710,6 +738,7 @@ def execute_crawl(
                 else:
                     stats.failed += 1
                     failed_urls.append(url)
+                    recent_logs.append(f"✗ sem dados")
             except Exception as e:
                 log.error(f"  ✗ Erro {url}: {e}")
                 stats.failed += 1
@@ -730,10 +759,18 @@ def execute_crawl(
         pct = (done / total) * 100
         progress(f"  📊 Progresso: {done}/{total} ({pct:.0f}%) — {stats.elapsed_str}")
 
+        _push_progress(
+            "enriquecimento",
+            f"Extraindo dados dos imóveis... ({done}/{total})",
+            done, total, recent_logs,
+        )
+
     # ── FASE 3: Marcar indisponíveis ──────────────────
     progress(f"\n{'─'*50}")
     progress(f"FASE 3: Marcando imóveis indisponíveis")
     progress(f"{'─'*50}")
+
+    _push_progress("finalizando", "Finalizando e marcando indisponíveis...", total, total, recent_logs)
 
     disabled = mark_imoveis_indisponiveis(fonte_id, urls)
     progress(f"✓ {disabled} imóveis marcados como indisponíveis")
@@ -775,5 +812,12 @@ def execute_crawl(
             progress(f"    ... e mais {n_complete - 20}")
 
     progress(f"\n{'='*60}\n")
+
+    # Progresso final para o frontend
+    _push_progress(
+        "concluido",
+        f"Concluído! {n_complete} completos, {n_incomplete} parciais, {n_failed} erros",
+        total, total, recent_logs, finished=True,
+    )
 
     return stats

@@ -17,6 +17,7 @@ type Imovel = {
   id: string;
   titulo: string | null;
   tipo: string | null;
+  transacao: string | null;
   preco: string | null;
   bairro: string | null;
   cidade: string | null;
@@ -30,8 +31,40 @@ type Imovel = {
   fonteUrl: string | null;
 };
 
+const TIPO_LABELS: Record<string, string> = {
+  casa: "Casa",
+  apartamento: "Apartamento",
+  terreno: "Terreno",
+  comercial: "Comercial",
+  rural: "Rural",
+  cobertura: "Cobertura",
+  kitnet: "Kitnet",
+  sobrado: "Sobrado",
+  flat: "Flat",
+  loft: "Loft",
+  galpao: "Galpão",
+  sala: "Sala",
+  loja: "Loja",
+  chacara: "Chácara",
+  predio: "Prédio",
+  box: "Box",
+  barracao: "Barracão",
+  duplex: "Duplex",
+  triplex: "Triplex",
+  condominio: "Condomínio",
+  pavilhao: "Pavilhão",
+  outro: "Outro",
+};
+
+const TRANSACAO_LABELS: Record<string, { label: string; className: string }> = {
+  venda: { label: "Venda", className: "badge-venda" },
+  aluguel: { label: "Aluguel", className: "badge-aluguel" },
+  ambos: { label: "Venda/Aluguel", className: "badge-ambos" },
+};
+
 type Filtros = {
   tipo: string;
+  transacao: string;
   cidade: string;
   precoMax: string;
   quartos: string;
@@ -63,6 +96,18 @@ function ImovelCard({
         ) : (
           <Home size={36} style={{ color: "#8fa3c0", strokeWidth: 1.25 }} />
         )}
+        <div className="imovel-badges">
+          {imovel.transacao && TRANSACAO_LABELS[imovel.transacao] && (
+            <span className={`imovel-badge ${TRANSACAO_LABELS[imovel.transacao].className}`}>
+              {TRANSACAO_LABELS[imovel.transacao].label}
+            </span>
+          )}
+          {imovel.tipo && (
+            <span className="imovel-badge badge-tipo">
+              {TIPO_LABELS[imovel.tipo] ?? imovel.tipo}
+            </span>
+          )}
+        </div>
       </div>
       <div className="imovel-body">
         <div
@@ -140,6 +185,7 @@ function ImovelCard({
 export default function BuscadorPage() {
   const [filtros, setFiltros] = useState<Filtros>({
     tipo: "",
+    transacao: "",
     cidade: "",
     precoMax: "",
     quartos: "",
@@ -171,6 +217,7 @@ export default function BuscadorPage() {
     try {
       const params = new URLSearchParams();
       if (filtros.tipo) params.set("tipo", filtros.tipo);
+      if (filtros.transacao) params.set("transacao", filtros.transacao);
       if (filtros.cidade) params.set("cidade", filtros.cidade);
       if (filtros.precoMax) params.set("precoMax", filtros.precoMax);
       if (filtros.quartos) params.set("quartosMin", filtros.quartos);
@@ -239,7 +286,21 @@ export default function BuscadorPage() {
             {/* Filtros avançados */}
             {showFiltros && (
               <div style={{ borderTop: "1px solid var(--border)", paddingTop: "16px" }}>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "12px" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "12px" }}>
+                  <div>
+                    <label className="form-label" style={{ marginBottom: "4px" }}>
+                      Transação
+                    </label>
+                    <select
+                      className="form-input"
+                      value={filtros.transacao}
+                      onChange={(e) => setFiltros({ ...filtros, transacao: e.target.value })}
+                    >
+                      <option value="">Todas</option>
+                      <option value="venda">Comprar</option>
+                      <option value="aluguel">Alugar</option>
+                    </select>
+                  </div>
                   <div>
                     <label className="form-label" style={{ marginBottom: "4px" }}>
                       Tipo
@@ -250,10 +311,21 @@ export default function BuscadorPage() {
                       onChange={(e) => setFiltros({ ...filtros, tipo: e.target.value })}
                     >
                       <option value="">Todos</option>
-                      <option value="Apartamento">Apartamento</option>
-                      <option value="Casa">Casa</option>
-                      <option value="Terreno">Terreno</option>
-                      <option value="Comercial">Comercial</option>
+                      <option value="apartamento">Apartamento</option>
+                      <option value="casa">Casa</option>
+                      <option value="sobrado">Sobrado</option>
+                      <option value="terreno">Terreno</option>
+                      <option value="comercial">Comercial</option>
+                      <option value="sala">Sala</option>
+                      <option value="loja">Loja</option>
+                      <option value="galpao">Galpão</option>
+                      <option value="pavilhao">Pavilhão</option>
+                      <option value="predio">Prédio</option>
+                      <option value="box">Box</option>
+                      <option value="cobertura">Cobertura</option>
+                      <option value="kitnet">Kitnet</option>
+                      <option value="chacara">Chácara</option>
+                      <option value="rural">Rural</option>
                     </select>
                   </div>
                   <div>
@@ -267,6 +339,8 @@ export default function BuscadorPage() {
                       onChange={(e) => setFiltros({ ...filtros, cidade: e.target.value })}
                     />
                   </div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "12px", marginTop: "12px" }}>
                   <div>
                     <label className="form-label" style={{ marginBottom: "4px" }}>
                       Preço máx.

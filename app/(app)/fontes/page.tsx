@@ -6,7 +6,8 @@ import { FonteActions } from "@/components/fontes/FonteActions";
 const statusLabel: Record<string, { label: string; badge: string; dot: string }> = {
   ok: { label: "Ativo", badge: "badge-success", dot: "dot-green" },
   erro: { label: "Erro", badge: "badge-danger", dot: "dot-red" },
-  sync: { label: "Sincronizando", badge: "badge-gray", dot: "dot-blue" },
+  crawling: { label: "Sincronizando", badge: "badge-info", dot: "dot-blue" },
+  sync: { label: "Sincronizando", badge: "badge-info", dot: "dot-blue" },
   pendente: { label: "Pendente", badge: "badge-gray", dot: "dot-gray" },
 };
 

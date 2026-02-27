@@ -225,6 +225,15 @@ def upsert_imoveis(fonte_id: str, items: list[ImovelInput]) -> int:
     return saved
 
 
+def update_crawl_progress(fonte_id: str, progress_data: dict) -> None:
+    """Atualiza o progresso do crawl no banco para polling do frontend."""
+    with cursor() as cur:
+        cur.execute(
+            "UPDATE fontes SET crawl_progress = %s::jsonb WHERE id = %s",
+            (json.dumps(progress_data, ensure_ascii=False), fonte_id),
+        )
+
+
 def mark_imoveis_indisponiveis(fonte_id: str, urls_ativas: list[str]) -> int:
     """Marca imóveis que não estão mais na listagem como indisponíveis."""
     if not urls_ativas:

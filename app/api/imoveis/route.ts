@@ -11,6 +11,7 @@ export async function GET(req: NextRequest) {
   const filtros = {
     q: searchParams.get("q") ?? undefined,
     tipo: searchParams.get("tipo") ?? undefined,
+    transacao: searchParams.get("transacao") ?? undefined,
     cidade: searchParams.get("cidade") ?? undefined,
     bairro: searchParams.get("bairro") ?? undefined,
     precoMin: searchParams.get("precoMin") ? Number(searchParams.get("precoMin")) : undefined,

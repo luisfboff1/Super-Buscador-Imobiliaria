@@ -57,7 +57,7 @@ RUN scrapling install
 COPY . .
 
 # Health check para Railway
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=15s --start-period=60s --retries=3 \
     CMD wget -qO- http://localhost:${PORT:-3001}/health || exit 1
 
 EXPOSE ${PORT:-3001}

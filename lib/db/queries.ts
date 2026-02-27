@@ -59,6 +59,7 @@ export async function getFontesComContagem() {
       ativa: tenantSchema.fontes.ativa,
       lastCrawl: tenantSchema.fontes.lastCrawl,
       crawlErro: tenantSchema.fontes.crawlErro,
+      crawlProgress: tenantSchema.fontes.crawlProgress,
       createdAt: tenantSchema.fontes.createdAt,
       totalImoveis: sql<number>`(
         SELECT COUNT(*) FROM imoveis WHERE imoveis.fonte_id = fontes.id
@@ -109,6 +110,7 @@ export async function updateFonteStatus(
 export type FiltrosImoveis = {
   q?: string;
   tipo?: string;
+  transacao?: string;
   cidade?: string;
   bairro?: string;
   precoMin?: number;
@@ -133,6 +135,8 @@ export async function searchImoveis(filtros: FiltrosImoveis = {}) {
 
   if (filtros.tipo)
     conditions.push(ilike(tenantSchema.imoveis.tipo, filtros.tipo));
+  if (filtros.transacao)
+    conditions.push(ilike(tenantSchema.imoveis.transacao, filtros.transacao));
   if (filtros.cidade)
     conditions.push(ilike(tenantSchema.imoveis.cidade, `%${filtros.cidade}%`));
   if (filtros.bairro)
@@ -151,6 +155,7 @@ export async function searchImoveis(filtros: FiltrosImoveis = {}) {
       id: tenantSchema.imoveis.id,
       titulo: tenantSchema.imoveis.titulo,
       tipo: tenantSchema.imoveis.tipo,
+      transacao: tenantSchema.imoveis.transacao,
       preco: tenantSchema.imoveis.preco,
       bairro: tenantSchema.imoveis.bairro,
       cidade: tenantSchema.imoveis.cidade,

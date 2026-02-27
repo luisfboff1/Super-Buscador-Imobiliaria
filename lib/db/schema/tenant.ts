@@ -21,6 +21,7 @@ export const fontes = pgTable("fontes", {
   lastCrawl: timestamp("last_crawl"),
   status: text("status").default("pendente").notNull(), // pendente | crawling | ok | erro
   crawlErro: text("crawl_erro"),
+  crawlProgress: jsonb("crawl_progress"), // { fase, message, done, total, pct, logs[] }
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

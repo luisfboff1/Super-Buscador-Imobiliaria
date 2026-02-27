@@ -364,7 +364,7 @@ Regras OBRIGATÓRIAS:
 
 SCHEMA_GUIDE = """{
   "titulo": "string|null",
-  "tipo": "casa|apartamento|terreno|comercial|rural|cobertura|kitnet|sobrado|flat|loft|galpao|sala|loja|chacara|predio|box|barracao|duplex|triplex|condominio|outro|null",
+  "tipo": "casa|apartamento|terreno|comercial|rural|cobertura|kitnet|sobrado|flat|loft|galpao|sala|loja|chacara|predio|box|barracao|duplex|triplex|condominio|pavilhao|outro|null",
   "transacao": "venda|aluguel|ambos|null",
   "cidade": "string|null",
   "bairro": "string|null",
@@ -381,6 +381,7 @@ VALID_TIPOS = {
     "casa", "apartamento", "terreno", "comercial", "rural", "cobertura",
     "kitnet", "sobrado", "flat", "loft", "galpao", "sala", "loja",
     "chacara", "predio", "box", "barracao", "duplex", "triplex", "condominio",
+    "pavilhao",
     "outro",
 }
 
