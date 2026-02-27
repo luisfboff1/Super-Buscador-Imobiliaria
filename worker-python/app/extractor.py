@@ -1,31 +1,35 @@
 """
 Extrator de dados de imóveis.
 
-Estratégia em cascata:
+Estratégia em cascata com merge:
 1. JSON-LD  — dados estruturados embutidos pela imobiliária (grátis, perfeito)
-2. CSS/Meta — extração via seletores CSS e meta tags (grátis, razoável)
-3. LLM      — Groq llama-3.1-8b-instant analisa texto limpo e extrai tudo
+2. Regex    — preço (R$) e área (m²) via regex universal (grátis, funciona em todos os sites)
+3. LLM      — Groq llama-3.1-8b-instant preenche TODOS os campos faltantes
 
-Cada nível é mais caro/lento que o anterior.
-O LLM só é chamado se os anteriores falharem.
+O LLM é chamado sempre que QUALQUER campo estiver faltando (preco, tipo, transacao,
+quartos, banheiros, vagas, area, bairro, descricao). Queremos o máximo de dados possível.
 """
 
 import os
 import re
 import json
+import time
+import threading
 from typing import Optional
 
 from bs4 import BeautifulSoup
 from groq import Groq
+from openai import OpenAI
 
 from app.db import ImovelInput
 from app.logger import get_logger
 
 log = get_logger("extractor")
 
-# ─── Groq client (lazy init) ─────────────────────────────────────────────────
+# ─── LLM clients (lazy init) ──────────────────────────────────────────────────
 
 _groq_client: Optional[Groq] = None
+_openai_client: Optional[OpenAI] = None
 
 
 def _get_groq() -> Groq:
@@ -34,8 +38,101 @@ def _get_groq() -> Groq:
         api_key = os.environ.get("GROQ_API_KEY")
         if not api_key:
             raise RuntimeError("GROQ_API_KEY não configurada")
-        _groq_client = Groq(api_key=api_key)
+        # max_retries=0: desliga retry automático do SDK (que espera 15s!)
+        _groq_client = Groq(api_key=api_key, max_retries=0)
     return _groq_client
+
+
+def _get_openai() -> Optional[OpenAI]:
+    global _openai_client
+    if _openai_client is None:
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            return None
+        _openai_client = OpenAI(api_key=api_key)
+    return _openai_client
+
+
+# ─── Rate limiter simples para Groq free tier ────────────────────────────────
+
+class _RateLimiter:
+    """
+    Garante intervalo mínimo entre chamadas LLM.
+    Groq free tier: 30 req/min → 2s entre chamadas evita 429.
+    Sem isso, cada 429 causa retry de 12-15s (muito pior).
+    """
+    def __init__(self, min_interval: float = 2.0):
+        self._min_interval = min_interval
+        self._last_call = 0.0
+        self._lock = threading.Lock()
+
+    def wait(self):
+        with self._lock:
+            now = time.time()
+            elapsed = now - self._last_call
+            if elapsed < self._min_interval:
+                wait_time = self._min_interval - elapsed
+                log.debug(f"Rate limiter: aguardando {wait_time:.1f}s antes da próxima chamada LLM")
+                time.sleep(wait_time)
+            self._last_call = time.time()
+
+
+_groq_limiter = _RateLimiter(min_interval=2.0)
+
+
+# ─── LLM universal: Groq primary → OpenAI fallback ─────────────────────────────
+
+def _llm_chat(
+    messages: list[dict],
+    max_tokens: int = 1000,
+    temperature: float = 0,
+) -> Optional[str]:
+    """
+    Chama LLM com fallback automático: Groq → OpenAI.
+    Retorna o texto da resposta ou None.
+    """
+    # 1. Tentar Groq (grátis, rápido)
+    try:
+        client = _get_groq()
+        _groq_limiter.wait()
+        response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        text = response.choices[0].message.content or ""
+        usage = response.usage
+        tokens_in = usage.prompt_tokens if usage else 0
+        tokens_out = usage.completion_tokens if usage else 0
+        log.debug(f"[groq] OK (tokens: {tokens_in}→{tokens_out})")
+        return text
+    except Exception as groq_err:
+        log.warning(f"[groq] Falhou: {groq_err}")
+
+    # 2. Fallback: OpenAI (pago, sem rate limit agressivo)
+    openai_client = _get_openai()
+    if openai_client is None:
+        log.error("[openai] OPENAI_API_KEY não disponível — sem fallback")
+        return None
+
+    try:
+        log.info("[openai] Usando GPT-4o-mini como fallback...")
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        text = response.choices[0].message.content or ""
+        usage = response.usage
+        tokens_in = usage.prompt_tokens if usage else 0
+        tokens_out = usage.completion_tokens if usage else 0
+        log.info(f"[openai] OK (tokens: {tokens_in}→{tokens_out})")
+        return text
+    except Exception as openai_err:
+        log.error(f"[openai] Também falhou: {openai_err}")
+        return None
 
 
 # ─── 1. Extração de imagens via BeautifulSoup ────────────────────────────────
@@ -74,9 +171,17 @@ def extract_from_json_ld(html: str, url: str) -> Optional[ImovelInput]:
 
             for item in items:
                 item_type = str(item.get("@type", "")).lower()
+
+                # Pular schemas de organização/website/breadcrumb
+                skip_types = ["organization", "localbusiness", "website", "webpage",
+                              "breadcrumb", "searchaction", "person", "imageobject",
+                              "agent", "broker", "service"]
+                if any(t in item_type for t in skip_types):
+                    continue
+
                 type_match = any(
                     t in item_type
-                    for t in ["realestate", "residence", "house", "apartment", "property", "product"]
+                    for t in ["realestate", "residence", "house", "apartment", "property", "product", "offer", "place"]
                 )
                 if not type_match:
                     continue
@@ -140,12 +245,12 @@ def _safe_int(val) -> Optional[int]:
         return None
 
 
-# ─── 3. Extração via CSS / meta tags ─────────────────────────────────────────
+# ─── 3. Extração rápida via regex (preço + área — universal) ──────────────────
 
-def extract_from_css(html: str, url: str) -> Optional[ImovelInput]:
+def extract_quick_regex(html: str, url: str) -> Optional[ImovelInput]:
     """
-    Extração por heurísticas CSS — tenta seletores comuns de sites imobiliários.
-    Menos preciso que JSON-LD, mais barato que LLM.
+    Extração rápida com regex universais: preço (R$), área (m²), título.
+    Nenhum CSS hardcoded — funciona em qualquer site.
     """
     soup = BeautifulSoup(html, "lxml")
 
@@ -153,9 +258,10 @@ def extract_from_css(html: str, url: str) -> Optional[ImovelInput]:
     for tag in soup.find_all(["script", "style", "nav", "footer", "header", "noscript"]):
         tag.decompose()
 
-    text = soup.get_text(" ", strip=True).lower()
+    text = soup.get_text(" ", strip=True)
+    text_lower = text.lower()
 
-    # Título: og:title ou <h1>
+    # Título: og:title ou <h1> (universal)
     titulo = None
     og_title = soup.find("meta", property="og:title")
     if og_title:
@@ -165,20 +271,14 @@ def extract_from_css(html: str, url: str) -> Optional[ImovelInput]:
         if h1:
             titulo = h1.get_text(strip=True)
 
-    # Preço: regex R$ no texto
-    preco = _extract_preco(text)
+    # Preço: regex R$ no texto (universal em sites BR)
+    preco = _extract_preco(text_lower)
 
-    # Área: regex m² ou metros
-    area = _extract_area(text)
+    # Área: regex m² (universal)
+    area = _extract_area(text_lower)
 
-    # Quartos
-    quartos = _extract_int_near(text, r"(\d+)\s*(?:quartos?|dorms?|dormit[óo]rios?|suítes?)")
-
-    # Banheiros
-    banheiros = _extract_int_near(text, r"(\d+)\s*(?:banheiros?|wc|lavabos?)")
-
-    # Vagas
-    vagas = _extract_int_near(text, r"(\d+)\s*(?:vagas?|garagens?)")
+    # Transação: detectar da URL ou título (heurística grátis)
+    transacao = _detect_transacao(url, titulo or "", text_lower)
 
     if not titulo and not preco:
         return None
@@ -188,16 +288,27 @@ def extract_from_css(html: str, url: str) -> Optional[ImovelInput]:
         titulo=titulo,
         preco=preco,
         area_m2=area,
-        quartos=quartos,
-        banheiros=banheiros,
-        vagas=vagas,
+        transacao=transacao,
     )
 
-    if result.fields_count >= 2:
-        preco_str = f"R${result.preco:,.0f}" if result.preco else "s/preço"
-        log.info(f"✓ [css] {result.titulo or 'sem título'} — {preco_str} — {result.fields_count} campos")
-        return result
+    preco_str = f"R${result.preco:,.0f}" if result.preco else "s/preço"
+    log.info(f"✓ [regex] {result.titulo or 'sem título'} — {preco_str} — {result.fields_count} campos")
+    return result
 
+
+def _detect_transacao(url: str, titulo: str, text: str) -> Optional[str]:
+    """Detecta tipo de transação a partir da URL, título e texto."""
+    combined = f"{url.lower()} {titulo.lower()} {text[:500]}"
+
+    has_venda = bool(re.search(r"(comprar|venda|à venda|a venda|para vender)", combined))
+    has_aluguel = bool(re.search(r"(alugar|aluguel|locação|para alugar|locacao)", combined))
+
+    if has_venda and has_aluguel:
+        return "ambos"
+    if has_venda:
+        return "venda"
+    if has_aluguel:
+        return "aluguel"
     return None
 
 
@@ -230,33 +341,30 @@ def _extract_area(text: str) -> Optional[float]:
     return None
 
 
-def _extract_int_near(text: str, pattern: str) -> Optional[int]:
-    """Extrai inteiro de match regex."""
-    m = re.search(pattern, text, re.I)
-    if m:
-        try:
-            return int(m.group(1))
-        except ValueError:
-            pass
-    return None
-
-
-# ─── 4. Extração via LLM (Groq) ─────────────────────────────────────────────
+# ─── 4. Extração via LLM (Groq) — o "agente" que completa tudo ──────────────
 
 SYSTEM_PROMPT = """Você é um extrator de dados de imóveis do mercado imobiliário brasileiro.
-Analise o conteúdo da página e extraia os dados do imóvel anunciado.
+Analise o conteúdo da página de um anúncio de imóvel e extraia TODOS os dados disponíveis.
 
-Regras:
+Regras OBRIGATÓRIAS:
 - Retorne APENAS dados explicitamente presentes na página. Não invente valores.
 - Se um campo não estiver na página, retorne null.
-- Preço deve ser o valor de VENDA (ignorar valores de aluguel/condomínio/IPTU).
+- EXTRAIA TUDO QUE CONSEGUIR: analise cuidadosamente todo o texto procurando cada campo.
+- "transacao" é OBRIGATÓRIO: analise se o imóvel está à venda ("venda"), para alugar ("aluguel"), ou ambos ("ambos"). Use pistas da URL, título, e texto. Se o site é de venda e não menciona aluguel, retorne "venda".
+- "tipo" é OBRIGATÓRIO: identifique o tipo do imóvel (casa, apartamento, terreno, sobrado, kitnet, etc). Deduza do título, descrição ou contexto.
+- "quartos": procure por "quartos", "dormitórios", "dorm", "suítes" — conte o total de dormitórios.
+- "banheiros": procure por "banheiros", "banheiro", "WC", "lavabo" — conte o total.
+- "vagas": procure por "vagas", "garagem", "estacionamento", "box" — conte o total de vagas de garagem.
+- "area_m2": procure por "m²", "m2", "metros quadrados", "área útil", "área total", "área privativa".
+- "bairro": nome do bairro, loteamento ou condomínio. Procure no endereço ou título.
+- "preco": valor numérico em reais. Se houver preço de venda E aluguel, retorne o de venda.
 - Estado deve ser a sigla com 2 letras (RS, SP, SC, MG, etc).
 - Descrição: máximo 500 caracteres, resumindo o texto principal do anúncio.
-- transacao: "venda" se está sendo vendido, "aluguel" se está sendo alugado, "ambos" se tiver os dois."""
+- Se houver uma lista de características (ex: "3 quartos, 2 banheiros, 1 vaga"), extraia cada valor."""
 
 SCHEMA_GUIDE = """{
   "titulo": "string|null",
-  "tipo": "casa|apartamento|terreno|comercial|rural|cobertura|kitnet|sobrado|flat|loft|galpao|sala|loja|outro|null",
+  "tipo": "casa|apartamento|terreno|comercial|rural|cobertura|kitnet|sobrado|flat|loft|galpao|sala|loja|chacara|predio|box|barracao|duplex|triplex|condominio|outro|null",
   "transacao": "venda|aluguel|ambos|null",
   "cidade": "string|null",
   "bairro": "string|null",
@@ -271,7 +379,9 @@ SCHEMA_GUIDE = """{
 
 VALID_TIPOS = {
     "casa", "apartamento", "terreno", "comercial", "rural", "cobertura",
-    "kitnet", "sobrado", "flat", "loft", "galpao", "sala", "loja", "outro",
+    "kitnet", "sobrado", "flat", "loft", "galpao", "sala", "loja",
+    "chacara", "predio", "box", "barracao", "duplex", "triplex", "condominio",
+    "outro",
 }
 
 
@@ -310,9 +420,7 @@ def extract_via_llm(html: str, url: str) -> Optional[ImovelInput]:
         return None
 
     try:
-        client = _get_groq()
-        response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+        text = _llm_chat(
             messages=[
                 {
                     "role": "system",
@@ -324,11 +432,12 @@ def extract_via_llm(html: str, url: str) -> Optional[ImovelInput]:
                 },
                 {"role": "user", "content": f"URL: {url}\n\n{clean_text}"},
             ],
-            temperature=0,
             max_tokens=1000,
         )
 
-        text = response.choices[0].message.content or ""
+        if not text:
+            log.warning(f"✗ LLM sem resposta — {url}")
+            return None
 
         # Extrair JSON da resposta
         json_match = re.search(r"\{[\s\S]*\}", text)
@@ -337,11 +446,6 @@ def extract_via_llm(html: str, url: str) -> Optional[ImovelInput]:
             return None
 
         data = json.loads(json_match.group())
-
-        # Tokens usados
-        usage = response.usage
-        tokens_in = usage.prompt_tokens if usage else 0
-        tokens_out = usage.completion_tokens if usage else 0
 
         result = ImovelInput(
             url_anuncio=url,
@@ -360,12 +464,45 @@ def extract_via_llm(html: str, url: str) -> Optional[ImovelInput]:
         )
 
         preco_str = f"R${result.preco:,.0f}" if result.preco else "s/preço"
-        log.info(f"✓ [llm] {result.titulo or url[:40]} — {preco_str} — {result.bairro or '?'} (tokens: {tokens_in}→{tokens_out})")
+        log.info(f"✓ [llm] {result.titulo or url[:40]} — {preco_str} — {result.bairro or '?'}")
         return result
 
     except Exception as e:
         log.error(f"✗ LLM falhou para {url}: {e}")
         return None
+
+
+# ─── Merge helper ─────────────────────────────────────────────────────────────
+
+def _merge_results(base: ImovelInput, extra: Optional[ImovelInput]) -> ImovelInput:
+    """Preenche campos vazios de `base` com valores de `extra`."""
+    if not extra:
+        return base
+    for field in [
+        "titulo", "tipo", "transacao", "descricao",
+        "cidade", "bairro", "estado",
+        "preco", "area_m2", "quartos", "banheiros", "vagas",
+    ]:
+        if getattr(base, field) is None and getattr(extra, field) is not None:
+            setattr(base, field, getattr(extra, field))
+    return base
+
+
+# ─── Campos para considerar extração "completa" ─────────────────────────────
+# LLM é chamada sempre que QUALQUER campo de dados estiver faltando.
+# Queremos preencher o máximo possível para cada imóvel.
+
+_ALL_DATA_FIELDS = (
+    "preco", "tipo", "transacao", "quartos", "banheiros",
+    "vagas", "area_m2", "bairro", "descricao",
+)
+
+
+def _missing_fields(result: Optional[ImovelInput]) -> list[str]:
+    """Retorna lista de campos de dados que faltam."""
+    if result is None:
+        return list(_ALL_DATA_FIELDS)
+    return [f for f in _ALL_DATA_FIELDS if getattr(result, f) is None]
 
 
 # ─── Pipeline completa de extração ───────────────────────────────────────────
@@ -379,7 +516,10 @@ def extract_property_data(
     """
     Pipeline completa de extração de um imóvel.
     
-    Cascata: JSON-LD → CSS → LLM
+    1. JSON-LD — dados estruturados (grátis, perfeito)
+    2. Regex   — preço R$ e área m² (grátis, universal)
+    3. LLM     — preenche TUDO que faltar (qualquer campo vazio aciona a LLM)
+    
     Retorna None se nada funcionar.
     """
     # Imagens via BS4 (sempre, independente do método)
@@ -390,36 +530,71 @@ def extract_property_data(
         log.debug(f"✗ 404 soft — {url}")
         return None
 
+    # Detectar página de listagem (não é um imóvel específico)
+    soup_quick = BeautifulSoup(html[:3000], "lxml")
+    og_title = soup_quick.find("meta", property="og:title")
+    quick_title = (og_title.get("content", "") if og_title else "").lower()
+    if not quick_title:
+        h1 = soup_quick.find("h1")
+        quick_title = (h1.get_text(strip=True) if h1 else "").lower()
+    if re.search(r"\d+\s*im[óo]veis?\s+para\s+(alugar|comprar|venda)", quick_title):
+        log.debug(f"✗ Página de listagem detectada — {url}")
+        return None
+
+    result: Optional[ImovelInput] = None
+    method_parts: list[str] = []
+
     # ── 1. JSON-LD (melhor cenário — grátis e perfeito) ──
-    result = extract_from_json_ld(html, url)
-    if result and (result.titulo or result.preco):
-        result.cidade = result.cidade or fallback_cidade
-        result.estado = result.estado or fallback_estado
-        result.imagens = imagens if imagens else result.imagens
-        log.info(f"✓ Método: JSON-LD — {result.titulo or url[:40]}")
-        return result
+    jsonld_result = extract_from_json_ld(html, url)
+    if jsonld_result and (jsonld_result.titulo or jsonld_result.preco):
+        result = jsonld_result
+        method_parts.append("JSON-LD")
 
-    # ── 2. CSS heurístico (grátis, razoável) ──
-    result = extract_from_css(html, url)
-    if result and result.fields_count >= 3:
-        result.cidade = result.cidade or fallback_cidade
-        result.estado = result.estado or fallback_estado
-        result.imagens = imagens
-        log.info(f"✓ Método: CSS — {result.titulo or url[:40]} ({result.fields_count} campos)")
-        return result
+    # ── 2. Regex universal (preço R$, área m², transação da URL) ──
+    regex_result = extract_quick_regex(html, url)
+    if regex_result:
+        if result is None:
+            result = regex_result
+            method_parts.append("Regex")
+        else:
+            result = _merge_results(result, regex_result)
+            if regex_result.preco or regex_result.transacao:
+                method_parts.append("+Regex")
 
-    # ── 3. LLM via Groq (último recurso) ──
-    result = extract_via_llm(html, url)
-    if result:
-        # Filtrar aluguel
-        if result.transacao and "alug" in result.transacao.lower():
-            log.info(f"✗ Aluguel ignorado — {url}")
-            return None
-        result.cidade = result.cidade or fallback_cidade
-        result.estado = result.estado or fallback_estado
-        result.imagens = imagens
-        log.info(f"✓ Método: LLM — {result.titulo or url[:40]}")
-        return result
+    # ── 3. LLM — sempre que faltar qualquer campo ──
+    missing = _missing_fields(result)
+    if missing:
+        log.info(f"  ⚡ {len(missing)} campos faltando ({', '.join(missing)}) — chamando LLM...")
+        llm_result = extract_via_llm(html, url)
+        if llm_result:
+            if result is None:
+                result = llm_result
+                method_parts.append("LLM")
+            else:
+                result = _merge_results(result, llm_result)
+                method_parts.append("+LLM")
+            # Log de campos que a LLM preencheu
+            still_missing = _missing_fields(result)
+            filled = len(missing) - len(still_missing)
+            if filled > 0:
+                log.info(f"  ✓ LLM preencheu {filled}/{len(missing)} campos")
+            if still_missing:
+                log.debug(f"  Ainda faltam: {', '.join(still_missing)}")
 
-    log.warning(f"✗ Nenhum método extraiu dados — {url}")
-    return None
+    if result is None:
+        log.warning(f"✗ Nenhum método extraiu dados — {url}")
+        return None
+
+    # Fallbacks de localização
+    result.cidade = result.cidade or fallback_cidade
+    result.estado = result.estado or fallback_estado
+    result.imagens = imagens if imagens else result.imagens
+
+    method_str = "".join(method_parts) or "?"
+    preco_str = f"R${result.preco:,.0f}" if result.preco else "s/preço"
+    trans_str = result.transacao or "?"
+    log.info(
+        f"✓ Método: {method_str} — {result.titulo or url[:40]} — "
+        f"{preco_str} — {trans_str} ({result.fields_count} campos)"
+    )
+    return result

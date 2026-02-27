@@ -172,17 +172,18 @@ def upsert_imoveis(fonte_id: str, items: list[ImovelInput]) -> int:
                     cur.execute(
                         """
                         INSERT INTO imoveis (
-                            fonte_id, url_anuncio, titulo, tipo, cidade, bairro, estado,
+                            fonte_id, url_anuncio, titulo, tipo, transacao, cidade, bairro, estado,
                             preco, area_m2, quartos, banheiros, vagas,
                             descricao, imagens, caracteristicas, disponivel, updated_at
                         ) VALUES (
-                            %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s, %s, %s,
                             %s, %s, %s, %s, %s,
                             %s, %s, %s::jsonb, true, NOW()
                         )
                         ON CONFLICT (url_anuncio) DO UPDATE SET
                             titulo = COALESCE(EXCLUDED.titulo, imoveis.titulo),
                             tipo = COALESCE(EXCLUDED.tipo, imoveis.tipo),
+                            transacao = COALESCE(EXCLUDED.transacao, imoveis.transacao),
                             cidade = COALESCE(EXCLUDED.cidade, imoveis.cidade),
                             bairro = COALESCE(EXCLUDED.bairro, imoveis.bairro),
                             estado = COALESCE(EXCLUDED.estado, imoveis.estado),
@@ -202,6 +203,7 @@ def upsert_imoveis(fonte_id: str, items: list[ImovelInput]) -> int:
                             item.url_anuncio,
                             item.titulo,
                             item.tipo,
+                            item.transacao,
                             item.cidade,
                             item.bairro,
                             item.estado,

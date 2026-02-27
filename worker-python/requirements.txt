@@ -8,8 +8,9 @@ uvicorn[standard]==0.34.2
 # Database
 psycopg2-binary==2.9.10
 
-# LLM extraction (Groq - free tier)
+# LLM extraction (Groq primary + OpenAI fallback)
 groq==0.25.0
+openai>=1.30.0
 
 # HTML parsing (fallback + images)
 beautifulsoup4==4.13.3

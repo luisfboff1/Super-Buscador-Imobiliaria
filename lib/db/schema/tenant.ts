@@ -30,6 +30,7 @@ export const imoveis = pgTable("imoveis", {
   urlAnuncio: text("url_anuncio").notNull().unique(),
   titulo: text("titulo"),
   tipo: text("tipo"), // apartamento | casa | terreno | comercial
+  transacao: text("transacao"), // venda | aluguel | ambos
   cidade: text("cidade"),
   bairro: text("bairro"),
   estado: text("estado"),
