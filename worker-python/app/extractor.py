@@ -1401,26 +1401,35 @@ def extract_property_data(
                 if loc:
                     tpl_result = _merge_results(tpl_result, loc)
 
-            # ── Regex grátis na descricao para quartos/banheiros/vagas não achados pelo CSS
+            # ── Regex grátis na descricao para quartos/banheiros/vagas:
+            # Para quartos: apenas quando null (CSS costuma ser confiável)
+            # Para banheiros/vagas: SEMPRE (CSS pioner é instável, descrição é ground truth)
             # Pega variações como "4 Dormitórios sendo 1 Suíte", "Garagem p/ 2 Carros"
-            if any(getattr(tpl_result, f) is None for f in ("quartos", "banheiros", "vagas")):
-                desc_text = (tpl_result.descricao or "").lower()
-                if desc_text:
-                    if tpl_result.quartos is None:
-                        tpl_result.quartos = _extract_quartos(desc_text)
-                    if tpl_result.banheiros is None:
-                        # Regex extra para "N Banheiros Sociais"
-                        m_banh = re.search(r'(\d+)\s*(?:banheiros?\s*sociais?|banheiros?|bwc|wc)', desc_text)
-                        tpl_result.banheiros = int(m_banh.group(1)) if m_banh and 1 <= int(m_banh.group(1)) <= 15 else None
-                    if tpl_result.vagas is None:
-                        # Regex extra para "Garagem p/ N Carros"
-                        m_vagas = re.search(r'(?:garagem\s+p/\s*(\d+)\s*carros?|garagem.*?(\d+)\s*carros?|(\d+)\s*vagas?)', desc_text)
-                        if m_vagas:
-                            v = int(next(g for g in m_vagas.groups() if g is not None))
-                            tpl_result.vagas = v if 1 <= v <= 10 else None
-                        elif re.search(r'garagem|garagem\s+c/', desc_text):
-                            # Garagem mencionada sem número → 1 vaga
-                            tpl_result.vagas = tpl_result.vagas or 1
+            desc_text = (tpl_result.descricao or "").lower()
+            if desc_text:
+                if tpl_result.quartos is None:
+                    tpl_result.quartos = _extract_quartos(desc_text)
+                # Banheiros: preferir descrição quando ela tem valor explícito
+                m_banh = re.search(r'(\d+)\s*(?:banheiros?\s*sociais?|banheiros?|bwc\b|wc\b)', desc_text)
+                if m_banh:
+                    banh_desc = int(m_banh.group(1))
+                    if 1 <= banh_desc <= 15:
+                        if tpl_result.banheiros != banh_desc:
+                            log.debug(f"  🔧 banheiros desc={banh_desc} vs CSS={tpl_result.banheiros} → usando desc")
+                        tpl_result.banheiros = banh_desc
+                elif tpl_result.banheiros is None:
+                    pass  # sem match e sem CSS: fica None
+                # Vagas: preferir descrição quando ela tem valor explícito
+                m_vagas = re.search(r'(?:garagem\s+p/\s*(\d+)\s*carros?|garagem.*?(\d+)\s*carros?|(\d+)\s*vagas?\s*de\s*(?:garagem|estacionamento)|(\d+)\s*vagas?\s*(?:de\s*)?(?:garagem|estacionamento)?)', desc_text)
+                if m_vagas:
+                    v = int(next(g for g in m_vagas.groups() if g is not None))
+                    if 1 <= v <= 10:
+                        if tpl_result.vagas != v:
+                            log.debug(f"  🔧 vagas desc={v} vs CSS={tpl_result.vagas} → usando desc")
+                        tpl_result.vagas = v
+                elif tpl_result.vagas is None and re.search(r'garagem|estacionamento', desc_text):
+                    # Garagem mencionada sem número → 1 vaga
+                    tpl_result.vagas = 1
 
             # ── Inferir tipo da URL se template não o extraiu
             if tpl_result.tipo is None:
