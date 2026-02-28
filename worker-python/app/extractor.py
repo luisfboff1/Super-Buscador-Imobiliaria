@@ -13,8 +13,6 @@ quartos, banheiros, vagas, area, bairro, descricao). Queremos o máximo de dados
 import os
 import re
 import json
-import time
-import threading
 from typing import Optional
 
 from bs4 import BeautifulSoup
@@ -53,34 +51,7 @@ def _get_openai() -> Optional[OpenAI]:
     return _openai_client
 
 
-# ─── Rate limiter simples para Groq free tier ────────────────────────────────
-
-class _RateLimiter:
-    """
-    Garante intervalo mínimo entre chamadas LLM.
-    Groq free tier: 30 req/min → 2s entre chamadas evita 429.
-    Sem isso, cada 429 causa retry de 12-15s (muito pior).
-    """
-    def __init__(self, min_interval: float = 2.0):
-        self._min_interval = min_interval
-        self._last_call = 0.0
-        self._lock = threading.Lock()
-
-    def wait(self):
-        with self._lock:
-            now = time.time()
-            elapsed = now - self._last_call
-            if elapsed < self._min_interval:
-                wait_time = self._min_interval - elapsed
-                log.debug(f"Rate limiter: aguardando {wait_time:.1f}s antes da próxima chamada LLM")
-                time.sleep(wait_time)
-            self._last_call = time.time()
-
-
-_groq_limiter = _RateLimiter(min_interval=2.0)
-
-
-# ─── LLM universal: Groq primary → OpenAI fallback ─────────────────────────────
+# ─── LLM universal: OpenAI primary → Groq fallback ─────────────────────────────
 
 def _llm_chat(
     messages: list[dict],
@@ -88,13 +59,31 @@ def _llm_chat(
     temperature: float = 0,
 ) -> Optional[str]:
     """
-    Chama LLM com fallback automático: Groq → OpenAI.
+    Chama LLM com fallback automático: OpenAI (rápido, confiável) → Groq.
     Retorna o texto da resposta ou None.
     """
-    # 1. Tentar Groq (grátis, rápido)
+    # 1. Tentar OpenAI (confiável, sem truncamento)
+    openai_client = _get_openai()
+    if openai_client is not None:
+        try:
+            response = openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            text = response.choices[0].message.content or ""
+            usage = response.usage
+            tokens_in = usage.prompt_tokens if usage else 0
+            tokens_out = usage.completion_tokens if usage else 0
+            log.debug(f"[openai] OK (tokens: {tokens_in}→{tokens_out})")
+            return text
+        except Exception as openai_err:
+            log.warning(f"[openai] Falhou: {openai_err}")
+
+    # 2. Fallback: Groq (grátis, mas trunca respostas longas)
     try:
         client = _get_groq()
-        _groq_limiter.wait()
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=messages,
@@ -108,30 +97,7 @@ def _llm_chat(
         log.debug(f"[groq] OK (tokens: {tokens_in}→{tokens_out})")
         return text
     except Exception as groq_err:
-        log.warning(f"[groq] Falhou: {groq_err}")
-
-    # 2. Fallback: OpenAI (pago, sem rate limit agressivo)
-    openai_client = _get_openai()
-    if openai_client is None:
-        log.error("[openai] OPENAI_API_KEY não disponível — sem fallback")
-        return None
-
-    try:
-        log.info("[openai] Usando GPT-4o-mini como fallback...")
-        response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        text = response.choices[0].message.content or ""
-        usage = response.usage
-        tokens_in = usage.prompt_tokens if usage else 0
-        tokens_out = usage.completion_tokens if usage else 0
-        log.info(f"[openai] OK (tokens: {tokens_in}→{tokens_out})")
-        return text
-    except Exception as openai_err:
-        log.error(f"[openai] Também falhou: {openai_err}")
+        log.warning(f"[groq] Também falhou: {groq_err}")
         return None
 
 
@@ -280,6 +246,14 @@ def extract_quick_regex(html: str, url: str) -> Optional[ImovelInput]:
     # Transação: detectar da URL ou título (heurística grátis)
     transacao = _detect_transacao(url, titulo or "", text_lower)
 
+    # Tipo: detectar de título ou texto
+    tipo = _detect_tipo(titulo or "", text_lower)
+
+    # Quartos, banheiros, vagas: regex universal
+    quartos = _extract_quartos(text_lower)
+    banheiros = _extract_banheiros(text_lower)
+    vagas = _extract_vagas(text_lower)
+
     if not titulo and not preco:
         return None
 
@@ -289,6 +263,10 @@ def extract_quick_regex(html: str, url: str) -> Optional[ImovelInput]:
         preco=preco,
         area_m2=area,
         transacao=transacao,
+        tipo=tipo,
+        quartos=quartos,
+        banheiros=banheiros,
+        vagas=vagas,
     )
 
     preco_str = f"R${result.preco:,.0f}" if result.preco else "s/preço"
@@ -339,6 +317,354 @@ def _extract_area(text: str) -> Optional[float]:
         except ValueError:
             pass
     return None
+
+
+def _detect_tipo(titulo: str, text: str) -> Optional[str]:
+    """Detecta tipo de imóvel do título ou texto."""
+    combined = f"{titulo} {text[:500]}".lower()
+    # Ordem importa: mais específico primeiro
+    tipo_patterns = [
+        ("cobertura", r"cobertura"),
+        ("kitnet", r"kitnet|kitnete|conjugado"),
+        ("sobrado", r"sobrado"),
+        ("duplex", r"duplex|d[úu]plex"),
+        ("triplex", r"triplex"),
+        ("flat", r"\bflat\b"),
+        ("loft", r"\bloft\b"),
+        ("apartamento", r"apartamento|\bapto?\b|\bap\b"),
+        ("casa", r"\bcasa\b"),
+        ("terreno", r"terreno|\blote\b"),
+        ("chacara", r"ch[áa]cara|s[íi]tio"),
+        ("galpao", r"galp[ãa]o|barrac[ãa]o"),
+        ("sala", r"\bsala comercial\b"),
+        ("loja", r"\bloja\b"),
+        ("pavilhao", r"pavilh[ãa]o"),
+        ("comercial", r"comercial|ponto comercial"),
+        ("rural", r"\brural\b|\bfazenda\b"),
+        ("condominio", r"condom[íi]nio fechado"),
+        ("box", r"\bbox\b"),
+        ("predio", r"pr[ée]dio"),
+    ]
+    for tipo, pattern in tipo_patterns:
+        if re.search(pattern, combined):
+            return tipo
+    return None
+
+
+def _extract_quartos(text: str) -> Optional[int]:
+    """Extrai número de quartos/dormitórios do texto."""
+    patterns = [
+        r"(\d+)\s*(?:quartos?|dormit[óo]rios?|dorms?|su[íi]tes?\s*e\s*\d+\s*(?:quarto|dorm))",
+        r"(\d+)\s*(?:dorm)",
+    ]
+    for p in patterns:
+        m = re.search(p, text)
+        if m:
+            val = int(m.group(1))
+            if 1 <= val <= 20:
+                return val
+    # Padrão alternativo: "suite" isolada pode significar 1
+    if re.search(r"su[íi]te", text) and not re.search(r"\d+\s*su[íi]te", text):
+        return None  # Não inferir 1
+    return None
+
+
+def _extract_banheiros(text: str) -> Optional[int]:
+    """Extrai número de banheiros do texto."""
+    m = re.search(r"(\d+)\s*(?:banheiros?|bwc|wcs?|lavabos?)", text)
+    if m:
+        val = int(m.group(1))
+        if 1 <= val <= 20:
+            return val
+    return None
+
+
+def _extract_vagas(text: str) -> Optional[int]:
+    """Extrai número de vagas de garagem do texto."""
+    m = re.search(r"(\d+)\s*(?:vagas?|garagens?|box)", text)
+    if m:
+        val = int(m.group(1))
+        if 1 <= val <= 20:
+            return val
+    return None
+
+
+# ─── Site Template Learning ──────────────────────────────────────────────────
+
+def _build_css_selector(el) -> Optional[str]:
+    """Constrói um CSS selector reproduzível para um elemento BS4."""
+    if not el or not hasattr(el, 'name') or el.name in ("[document]", None):
+        return None
+
+    parts = []
+    current = el
+
+    for _ in range(3):  # max 3 níveis acima
+        if not current or not hasattr(current, 'name') or current.name in ("[document]", "html", "body", None):
+            break
+
+        tag = current.name
+        eid = current.get("id", "")
+        if eid and not re.match(r"^[0-9]", eid) and len(eid) < 40:
+            parts.insert(0, f"#{eid}")
+            break
+
+        classes = current.get("class", [])
+        stable = [
+            c for c in classes
+            if c and len(c) < 40
+            and not re.match(
+                r'^(is-|has-|active|open|show|selected|hover|focus|'
+                r'ng-|v-|js-|wp-block|post-\d|entry-|page-|col-|row|'
+                r'animate|fade|slide|transition)', c
+            )
+        ]
+
+        if stable:
+            parts.insert(0, f"{tag}.{'.' .join(sorted(stable)[:2])}")
+            break
+        else:
+            parts.insert(0, tag)
+
+        current = current.parent
+
+    return " ".join(parts) if parts else None
+
+
+def _find_selectors_for_value(soup, value, field: str) -> list[str]:
+    """Acha CSS selectors de elementos contendo o valor extraído."""
+    str_val = str(value).strip()
+    if not str_val or len(str_val) < 1:
+        return []
+
+    search_patterns: list[str] = []
+
+    if field == "preco":
+        try:
+            v = float(str_val)
+            search_patterns.append(re.escape(f"{v:,.0f}".replace(",", ".")))
+            search_patterns.append(re.escape(str(int(v))))
+        except Exception:
+            search_patterns.append(re.escape(str_val))
+    elif field == "area_m2":
+        try:
+            v = float(str_val)
+            search_patterns.append(re.escape(str(int(v))))
+        except Exception:
+            search_patterns.append(re.escape(str_val))
+    elif field in ("quartos", "banheiros", "vagas"):
+        # Buscar "N + keyword" para evitar falsos positivos com números soltos
+        num = re.escape(str_val)
+        keywords = {
+            "quartos": ["quarto", "dormit", "dorm"],
+            "banheiros": ["banheir", "bwc", "wc"],
+            "vagas": ["vaga", "garagem", "box"],
+        }
+        for kw in keywords.get(field, []):
+            search_patterns.append(f"{num}\\s*{re.escape(kw)}")
+    elif field == "titulo":
+        words = str_val.split()[:4]
+        if len(words) >= 2:
+            search_patterns.append(re.escape(" ".join(words)))
+    else:
+        if len(str_val) >= 3:
+            search_patterns.append(re.escape(str_val))
+
+    if not search_patterns:
+        return []
+
+    results: list[str] = []
+    for pattern in search_patterns:
+        try:
+            for text_node in soup.find_all(string=re.compile(pattern, re.I)):
+                parent = text_node.parent
+                if parent and parent.name not in ("script", "style", "head", "[document]", None):
+                    sel = _build_css_selector(parent)
+                    if sel and sel not in results:
+                        results.append(sel)
+        except re.error:
+            continue
+
+    return results[:5]
+
+
+def _parse_template_field(field: str, raw_text: str):
+    """Parse valor de texto bruto para o tipo correto do campo."""
+    if not raw_text:
+        return None
+    text = raw_text.strip()
+
+    if field == "preco":
+        return _extract_preco(text.lower())
+    if field == "area_m2":
+        return _extract_area(text.lower())
+    if field in ("quartos", "banheiros", "vagas"):
+        m = re.search(r"(\d+)", text)
+        return int(m.group(1)) if m else None
+    if field == "tipo":
+        t = _detect_tipo(text, text.lower())
+        return t if t in VALID_TIPOS else None
+    if field == "transacao":
+        return _detect_transacao("", text, text.lower())
+    if field == "descricao":
+        return text[:500] if len(text) >= 10 else None
+    # Strings: titulo, bairro, cidade, estado
+    return text if len(text) >= 2 else None
+
+
+class SiteTemplate:
+    """
+    Aprende CSS selectors de um site para extrair dados sem LLM.
+
+    Estratégia:
+    1. Primeiras 5 URLs: LLM extrai dados normalmente
+    2. Para cada URL, buscamos no HTML os CSS selectors dos valores encontrados
+    3. Selectors que aparecem em 2+ páginas são confirmados
+    4. URLs restantes usam CSS selectors (sem LLM, ~100x mais rápido)
+
+    Lida com tipos diferentes (casa vs terreno):
+    - Selectors são POR CAMPO, independentes
+    - Se quartos não existe num terreno, o selector retorna vazio = null
+    - Isso é correto: terrenos não têm quartos
+    """
+
+    LEARN_PAGES = 5
+    MIN_VOTES = 2
+    MIN_FIELDS = 3   # mínimo de campos confirmados
+    DISABLE_MISS_RATE = 0.35  # desabilita se >35% falhas
+
+    ALL_FIELDS = (
+        "titulo", "preco", "tipo", "bairro", "cidade", "estado",
+        "transacao", "quartos", "banheiros", "vagas", "area_m2", "descricao",
+    )
+
+    def __init__(self):
+        self._votes: dict[str, dict[str, int]] = {}
+        self.confirmed: dict[str, str] = {}  # field -> css_selector
+        self.is_ready = False
+        self._sample_count = 0
+        # Métricas
+        self.hits = 0
+        self.misses = 0
+        self.llm_calls = 0
+
+    @property
+    def learning(self) -> bool:
+        return not self.is_ready and self._sample_count < self.LEARN_PAGES
+
+    def add_sample(self, html: str, data: 'ImovelInput'):
+        """Aprende selectors de uma página com dados extraídos."""
+        if self.is_ready:
+            return
+
+        soup = BeautifulSoup(html, "lxml")
+        for tag in soup.find_all(["script", "style", "svg", "noscript", "iframe"]):
+            tag.decompose()
+
+        for field in self.ALL_FIELDS:
+            value = getattr(data, field, None)
+            if value is None:
+                continue
+
+            selectors = _find_selectors_for_value(soup, value, field)
+            if not selectors:
+                continue
+
+            if field not in self._votes:
+                self._votes[field] = {}
+            for sel in selectors[:3]:
+                self._votes[field][sel] = self._votes[field].get(sel, 0) + 1
+
+        self._sample_count += 1
+        log.debug(f"📘 Template amostra {self._sample_count}/{self.LEARN_PAGES}")
+
+        if self._sample_count >= self.LEARN_PAGES:
+            self._confirm()
+
+    def _confirm(self):
+        """Confirma selectors com votos suficientes."""
+        for field, candidates in self._votes.items():
+            if not candidates:
+                continue
+            best_sel = max(candidates, key=candidates.get)
+            best_votes = candidates[best_sel]
+            if best_votes >= self.MIN_VOTES:
+                self.confirmed[field] = best_sel
+
+        has_core = bool({"titulo", "preco"} & set(self.confirmed))
+        if has_core and len(self.confirmed) >= self.MIN_FIELDS:
+            self.is_ready = True
+            fields_str = ", ".join(self.confirmed.keys())
+            log.info(f"🎯 Template CONFIRMADO — {len(self.confirmed)} selectors: {fields_str}")
+        else:
+            log.info(
+                f"⚠ Template não confirmado: {len(self.confirmed)} selectors "
+                f"({', '.join(self.confirmed.keys()) or 'nenhum'})"
+            )
+
+    def extract(
+        self, html: str, url: str,
+        fallback_cidade: Optional[str] = None,
+        fallback_estado: Optional[str] = None,
+    ) -> Optional[ImovelInput]:
+        """Extrai dados usando CSS selectors (sem LLM)."""
+        if not self.is_ready:
+            return None
+
+        soup = BeautifulSoup(html, "lxml")
+        data: dict = {}
+
+        for field, selector in self.confirmed.items():
+            try:
+                el = soup.select_one(selector)
+                if el:
+                    raw = el.get_text(strip=True)
+                    if raw:
+                        parsed = _parse_template_field(field, raw)
+                        if parsed is not None:
+                            data[field] = parsed
+            except Exception:
+                continue
+
+        if len(data) < 2:
+            self.misses += 1
+            # Se taxa de falha alta, desabilitar template
+            total = self.hits + self.misses
+            if total > 15 and self.misses / total > self.DISABLE_MISS_RATE:
+                log.warning(
+                    f"⚠ Template desabilitado: {self.misses}/{total} falhas "
+                    f"({self.misses/total:.0%})"
+                )
+                self.is_ready = False
+            return None
+
+        self.hits += 1
+
+        result = ImovelInput(
+            url_anuncio=url,
+            titulo=data.get("titulo"),
+            tipo=data.get("tipo") if data.get("tipo") in VALID_TIPOS else None,
+            transacao=data.get("transacao"),
+            cidade=data.get("cidade") or fallback_cidade,
+            bairro=data.get("bairro"),
+            estado=data.get("estado") or fallback_estado,
+            preco=data.get("preco"),
+            area_m2=data.get("area_m2"),
+            quartos=data.get("quartos"),
+            banheiros=data.get("banheiros"),
+            vagas=data.get("vagas"),
+            descricao=data.get("descricao"),
+        )
+
+        result.imagens = extract_images(html)
+        return result
+
+    def __repr__(self):
+        status = "READY" if self.is_ready else f"learning {self._sample_count}/{self.LEARN_PAGES}"
+        return (
+            f"SiteTemplate({status}, {len(self.confirmed)} sel, "
+            f"hits={self.hits}, miss={self.misses}, llm={self.llm_calls})"
+        )
 
 
 # ─── 4. Extração via LLM (Groq) — o "agente" que completa tudo ──────────────
@@ -513,14 +839,22 @@ def extract_property_data(
     url: str,
     fallback_cidade: Optional[str] = None,
     fallback_estado: Optional[str] = None,
+    template: Optional['SiteTemplate'] = None,
 ) -> Optional[ImovelInput]:
     """
     Pipeline completa de extração de um imóvel.
-    
+
+    Com template pronto (após aprender 5 páginas):
+    1. Template (CSS selectors) → rápido, sem LLM
+    2. Merge com Regex para campos extras
+    3. Se template falhar → fallback p/ pipeline completa
+
+    Sem template (ou durante aprendizado):
     1. JSON-LD — dados estruturados (grátis, perfeito)
-    2. Regex   — preço R$ e área m² (grátis, universal)
-    3. LLM     — preenche TUDO que faltar (qualquer campo vazio aciona a LLM)
-    
+    2. Regex   — preço, tipo, quartos, área, transação (grátis, universal)
+    3. LLM     — preenche campos core faltantes
+    4. Ensina template com os dados extraídos
+
     Retorna None se nada funcionar.
     """
     # Imagens via BS4 (sempre, independente do método)
@@ -542,6 +876,33 @@ def extract_property_data(
         log.debug(f"✗ Página de listagem detectada — {url}")
         return None
 
+    # ── FAST PATH: Template pronto → CSS selectors (sem LLM) ──
+    if template and template.is_ready:
+        tpl_result = template.extract(html, url, fallback_cidade, fallback_estado)
+        if tpl_result:
+            # Merge com regex para campos que o template não pegou
+            regex_extra = extract_quick_regex(html, url)
+            if regex_extra:
+                # Cross-validação de preço: se divergem muito, logar aviso
+                if tpl_result.preco and regex_extra.preco:
+                    diff_pct = abs(tpl_result.preco - regex_extra.preco) / max(tpl_result.preco, regex_extra.preco)
+                    if diff_pct > 0.15:
+                        log.debug(
+                            f"  ⚠ Preço diverge: template=R${tpl_result.preco:,.0f} "
+                            f"vs regex=R${regex_extra.preco:,.0f} ({diff_pct:.0%})"
+                        )
+                tpl_result = _merge_results(tpl_result, regex_extra)
+            tpl_result.imagens = imagens if imagens else tpl_result.imagens
+            preco_str = f"R${tpl_result.preco:,.0f}" if tpl_result.preco else "s/preço"
+            log.info(
+                f"⚡ [template] {tpl_result.titulo or url[-30:]} — "
+                f"{preco_str} ({tpl_result.fields_count} campos)"
+            )
+            return tpl_result
+        # Template falhou nesta URL → fallback para pipeline completa
+        log.debug(f"  Template miss → fallback LLM: {url}")
+
+    # ── PIPELINE NORMAL: JSON-LD → Regex → LLM ──
     result: Optional[ImovelInput] = None
     method_parts: list[str] = []
 
@@ -551,7 +912,7 @@ def extract_property_data(
         result = jsonld_result
         method_parts.append("JSON-LD")
 
-    # ── 2. Regex universal (preço R$, área m², transação da URL) ──
+    # ── 2. Regex universal (preço, tipo, quartos, área, transação) ──
     regex_result = extract_quick_regex(html, url)
     if regex_result:
         if result is None:
@@ -559,13 +920,20 @@ def extract_property_data(
             method_parts.append("Regex")
         else:
             result = _merge_results(result, regex_result)
-            if regex_result.preco or regex_result.transacao:
+            if regex_result.preco or regex_result.transacao or regex_result.tipo:
                 method_parts.append("+Regex")
 
-    # ── 3. LLM — sempre que faltar qualquer campo ──
+    # ── 3. LLM — chamada se campos core faltam ──
     missing = _missing_fields(result)
-    if missing:
-        log.info(f"  ⚡ {len(missing)} campos faltando ({', '.join(missing)}) — chamando LLM...")
+    # Campos core: sem eles o dado é pouco útil
+    core_missing = [f for f in missing if f in ("preco", "tipo", "bairro", "transacao")]
+    # Durante aprendizado do template: sempre chamar LLM para coleta de dados
+    should_call_llm = bool(core_missing) or (template is not None and template.learning)
+
+    if should_call_llm:
+        if template:
+            template.llm_calls += 1
+        log.info(f"  ⚡ {len(missing)} faltando ({', '.join(missing[:5])}) — LLM...")
         llm_result = extract_via_llm(html, url)
         if llm_result:
             if result is None:
@@ -574,17 +942,18 @@ def extract_property_data(
             else:
                 result = _merge_results(result, llm_result)
                 method_parts.append("+LLM")
-            # Log de campos que a LLM preencheu
             still_missing = _missing_fields(result)
             filled = len(missing) - len(still_missing)
             if filled > 0:
                 log.info(f"  ✓ LLM preencheu {filled}/{len(missing)} campos")
-            if still_missing:
-                log.debug(f"  Ainda faltam: {', '.join(still_missing)}")
 
     if result is None:
         log.warning(f"✗ Nenhum método extraiu dados — {url}")
         return None
+
+    # ── Ensinar template (durante fase de aprendizado) ──
+    if template and template.learning:
+        template.add_sample(html, result)
 
     # Fallbacks de localização
     result.cidade = result.cidade or fallback_cidade

@@ -14,15 +14,28 @@ Scrapling fornece:
 
 import os
 import re
+import gc
 import asyncio
 import time
+import threading
+import traceback
 from typing import Optional, Callable
 from urllib.parse import urljoin, urlparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import psutil
 from scrapling.fetchers import Fetcher, StealthyFetcher
 
+
+# Catch unhandled thread exceptions
+def _thread_excepthook(args):
+    log.error(f"THREAD CRASH ({args.thread}): {args.exc_type.__name__}: {args.exc_value}")
+    log.error(traceback.format_exception(args.exc_type, args.exc_value, args.exc_tb))
+
+threading.excepthook = _thread_excepthook
+
 from app.db import ImovelInput
-from app.extractor import extract_property_data, extract_images
+from app.extractor import extract_property_data, extract_images, SiteTemplate
 from app.logger import get_logger
 
 log = get_logger("crawler")
@@ -30,8 +43,8 @@ log = get_logger("crawler")
 # ─── Configuração ─────────────────────────────────────────────────────────────
 
 MAX_PAGES = int(os.environ.get("CRAWL_MAX_PAGES", "200"))
-MAX_ENRICH = int(os.environ.get("CRAWL_MAX_ENRICH", "10"))  # 10 para teste, 0 = todos
-CONCURRENCY = int(os.environ.get("CRAWL_CONCURRENCY", "3"))
+MAX_ENRICH = int(os.environ.get("CRAWL_MAX_ENRICH", "0"))  # 0 = todos (sem limite)
+CONCURRENCY = int(os.environ.get("CRAWL_CONCURRENCY", "2"))  # 2 paralelo (5 causava OOM em sites grandes como Balen 391 URLs)
 
 # ─── Filtros de URL ───────────────────────────────────────────────────────────
 
@@ -46,7 +59,8 @@ SKIP_URL_PATTERNS = [
         r"/(plantao|atendimento|simulador|financiamento)",
         r"/(anuncie|anunciar|anuncie-o-seu|anuncie-seu|publicar)",
         # Listagens genéricas / Paginação
-        r"/imoveis(/|$)",
+        r"/imoveis/?(\?|#|$)",       # /imoveis sozinho (com ou sem query/hash)
+        r"/-/-",                      # URLs com 2+ placeholders (filtros Antonella /-/-/tipo)
         r"/(page|pagina|pag)/\d+",
         r"[?&](page|pagina|pag)=\d+",
         # Anchors e arquivos estáticos
@@ -78,10 +92,19 @@ def is_detail_page_url(url: str, base_hostname: str) -> bool:
     except Exception:
         return False
 
-    path = urlparse(url).path
+    path = parsed.path
     if not path or path == "/":
         return False
 
+    # ── STRONG POSITIVE: patterns que são DEFINITIVAMENTE detalhe ──
+    # /imovel/12345 (singular, com ID numérico) — Antonella, Attuale, etc.
+    if re.search(r"/imovel/\d+", path):
+        return True
+    # /imovel/slug-longo (singular, com slug)
+    if re.search(r"/imovel/[a-z0-9][\w-]{5,}", path, re.I):
+        return True
+
+    # ── SKIP: patterns que NÃO são detalhe ──
     if any(p.search(url) for p in SKIP_URL_PATTERNS):
         return False
     # Páginas de listagem por cidade/tipo NÃO são detalhe
@@ -113,7 +136,12 @@ def fetch_page(url: str, stealth: bool = False) -> Optional[object]:
     Faz fetch de uma página.
     
     - stealth=False: Fetcher rápido (HTTP, sem browser)
-    - stealth=True: StealthyFetcher (Playwright stealth, bypass Cloudflare)
+    - stealth=True: StealthyFetcher (Playwright stealth)
+    
+    Stealth usa network_idle=False + wait=3000ms para evitar espera por
+    analytics/trackers (economia de ~25s em sites pesados como Bassanesi)
+    mas ainda dando tempo para SPAs renderizarem (Antonella, etc).
+    Benchmarks: Bassanesi 33s→6.5s, Antonella 5.4s→6.5s (mesmos links).
     """
     try:
         if stealth:
@@ -121,9 +149,10 @@ def fetch_page(url: str, stealth: bool = False) -> Optional[object]:
             page = StealthyFetcher.fetch(
                 url,
                 headless=True,
-                network_idle=True,
-                timeout=30000,
-                disable_resources=True,
+                network_idle=False,
+                timeout=60000,
+                wait=3000,
+                disable_resources=False,
             )
         else:
             log.debug(f"Fetch rápido: {url}")
@@ -136,6 +165,200 @@ def fetch_page(url: str, stealth: bool = False) -> Optional[object]:
     except Exception as e:
         log.warning(f"Fetch falhou ({url}): {e}")
         return None
+
+
+def fetch_page_with_scroll(url: str, max_scrolls: int = 50,
+                           on_progress: Optional[Callable] = None) -> Optional[object]:
+    """
+    Faz fetch com Playwright e rola/clica 'Carregar mais' para carregar
+    mais conteúdo (infinite scroll / lazy loading).
+    
+    Usa page_action do Scrapling (sync Playwright page object).
+    """
+    progress = on_progress or log.info
+    
+    def _scroll_action(page):
+        """Sync automation function para page_action do Scrapling."""
+        import time as _time
+        
+        prev_height = 0
+        no_change_count = 0
+        total_clicks = 0
+        
+        for i in range(max_scrolls):
+            # Tentar clicar "Carregar mais" / "Load more" / "Ver mais"
+            clicked = False
+            for selector in [
+                'button:has-text("Carregar mais")',
+                'button:has-text("carregar mais")',
+                'button:has-text("Ver mais")',
+                'button:has-text("ver mais")',
+                'button:has-text("Mostrar mais")',
+                'button:has-text("Load more")',
+                'a:has-text("Carregar mais")',
+                'a:has-text("Ver mais")',
+                '[class*="load-more"]',
+                '[class*="loadmore"]',
+            ]:
+                try:
+                    btn = page.locator(selector).first
+                    if btn.is_visible(timeout=500):
+                        btn.click()
+                        clicked = True
+                        total_clicks += 1
+                        _time.sleep(2)  # Esperar AJAX
+                        break
+                except Exception:
+                    continue
+            
+            if not clicked:
+                # Scroll até o final
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                _time.sleep(2)
+            
+            # Verificar se novo conteúdo foi carregado
+            new_height = page.evaluate("document.body.scrollHeight")
+            if new_height == prev_height:
+                no_change_count += 1
+                if no_change_count >= 3:
+                    break
+            else:
+                no_change_count = 0
+            prev_height = new_height
+        
+        progress(f"    📜 Scroll: {i+1} iterações, {total_clicks} cliques (altura: {prev_height}px)")
+    
+    try:
+        log.info(f"Fetch com scroll: {url}")
+        page = StealthyFetcher.fetch(
+            url,
+            headless=True,
+            network_idle=False,
+            timeout=120000,
+            wait=3000,
+            disable_resources=False,
+            page_action=_scroll_action,
+        )
+        return page
+    except Exception as e:
+        log.warning(f"Fetch com scroll falhou ({url}): {e}")
+        return None
+
+
+def fetch_page_with_js_pagination(
+    url: str, base_hostname: str, max_pages: int = 50,
+    on_progress: Optional[Callable] = None,
+) -> set:
+    """
+    Faz fetch com Playwright e clica nos botões de paginação JavaScript
+    (pages com <a href="#">) para coletar links de todas as páginas.
+
+    Retorna set de URLs de detalhe encontrados em todas as páginas.
+    """
+    progress = on_progress or log.info
+    collected_links: set = set()
+
+    def _paginate_action(page):
+        """Sync page_action: clica em cada botão de página."""
+        import time as _time
+
+        def _get_detail_links():
+            """Extrai links de detalhe da página atual via JS."""
+            return page.evaluate("""(hostname) => {
+                const links = new Set();
+                document.querySelectorAll('a[href]').forEach(a => {
+                    try {
+                        const href = a.href;
+                        if (href && href.includes('/imovel/')) {
+                            const url = new URL(href);
+                            if (url.hostname.includes(hostname)) {
+                                links.add(url.origin + url.pathname.replace(/\\/$/, ''));
+                            }
+                        }
+                    } catch(e) {}
+                });
+                return Array.from(links);
+            }""", base_hostname)
+
+        # Página 1
+        _time.sleep(2)
+        p1_links = _get_detail_links()
+        for l in p1_links:
+            collected_links.add(l)
+
+        for pg in range(2, max_pages + 1):
+            # Clicar no botão da página
+            click_result = page.evaluate("""(pageNum) => {
+                // Procurar no #pagination ou .pagination
+                const containers = document.querySelectorAll('#pagination, .pagination, [class*=paginat], nav[aria-label*=paginat]');
+                for (const container of containers) {
+                    const links = container.querySelectorAll('a');
+                    for (const a of links) {
+                        const text = a.textContent.trim();
+                        if (text === String(pageNum)) {
+                            a.click();
+                            return 'clicked';
+                        }
+                    }
+                }
+                // Tentar botão "próximo" / "»"
+                for (const container of containers) {
+                    const links = container.querySelectorAll('a');
+                    for (const a of links) {
+                        const text = a.textContent.trim();
+                        if (text === '»' || text === '>' || text.toLowerCase().includes('próx') || text.toLowerCase().includes('next')) {
+                            if (a.classList.contains('disabled') || a.getAttribute('disabled')) {
+                                return 'disabled';
+                            }
+                            a.click();
+                            return 'clicked_next';
+                        }
+                    }
+                }
+                return 'not_found';
+            }""", pg)
+
+            if click_result in ('not_found', 'disabled'):
+                break
+
+            _time.sleep(2)  # Esperar AJAX carregar
+
+            pg_links = _get_detail_links()
+            new_links = [l for l in pg_links if l not in collected_links]
+            for l in pg_links:
+                collected_links.add(l)
+
+            if pg % 5 == 0:
+                progress(f"    📄 JS paginação: pág {pg}, +{len(new_links)} novos (total: {len(collected_links)})")
+
+            # Se 2 páginas consecutivas sem novos, parar
+            if not new_links:
+                # Tentar mais uma vez
+                _time.sleep(1)
+                pg_links2 = _get_detail_links()
+                new2 = [l for l in pg_links2 if l not in collected_links]
+                for l in pg_links2:
+                    collected_links.add(l)
+                if not new2:
+                    break
+
+        progress(f"    📄 JS paginação concluída: {pg} páginas, {len(collected_links)} links")
+
+    try:
+        log.info(f"Fetch com JS pagination: {url}")
+        StealthyFetcher.fetch(
+            url,
+            headless=True,
+            network_idle=False,
+            timeout=180000,
+            wait=5000,
+            disable_resources=False,
+            page_action=_paginate_action,
+        )
+        return collected_links
+    except Exception as e:
+        log.warning(f"Fetch com JS pagination falhou ({url}): {e}")
+        return collected_links  # Retorna o que conseguiu coletar
 
 
 def safe_html(page) -> str:
@@ -186,6 +409,185 @@ def extract_detail_links(page, base_hostname: str) -> list[str]:
         return []
 
 
+def _find_pagination_in_dom(page, listing_url: str, base_hostname: str) -> Optional[tuple[str, int]]:
+    """
+    Procura links/botões de paginação no DOM renderizado (Playwright).
+    Captura o padrão REAL de paginação, incluindo:
+      - <a href> com query param de paginação
+      - <button> dentro de containers de paginação (MUI, custom, etc.)
+    
+    Retorna (url_pagina, numero_pagina) ou None.
+    Se paginação é via <button> (sem href), retorna ("__BUTTON_PAGINATION__", max_page).
+    Ex: ("https://site.com/imoveis?filtros&pagination=2", 2)
+    """
+
+    # ── PARTE A: <a href> com paginação ──────────────────────────────────────
+    candidates: list[tuple[int, str, str, int]] = []  # (score, href, text, page_num)
+
+    try:
+        all_links = page.css("a[href]")
+    except Exception:
+        all_links = []
+
+    for link in all_links:
+        href = link.attrib.get("href", "")
+        if not href or href in ("#", "javascript:void(0)", "javascript:;"):
+            continue
+
+        # Resolve relative
+        if href.startswith("/"):
+            href = f"https://{base_hostname}{href}"
+        elif not href.startswith("http"):
+            continue
+
+        # Must be same domain
+        try:
+            if urlparse(href).hostname != base_hostname:
+                continue
+        except Exception:
+            continue
+
+        # Skip if it's the same page (listing URL)
+        if href.rstrip("/") == listing_url.rstrip("/"):
+            continue
+
+        text = ""
+        try:
+            text = (link.text or "").strip()
+        except Exception:
+            pass
+
+        aria_label = ""
+        try:
+            aria_label = (link.attrib.get("aria-label", "") or "").lower()
+        except Exception:
+            pass
+
+        score = 0
+        detected_page_num = 0
+
+        if text.strip() == "2":
+            score += 10
+            detected_page_num = 2
+        elif text.strip() == "3":
+            score += 8
+            detected_page_num = 3
+        elif text.strip() in ("»", "›", ">", ">>"):
+            score += 6
+            detected_page_num = 2
+        elif any(kw in text.lower() for kw in ["próxima", "próximo", "next", "seguinte"]):
+            score += 6
+            detected_page_num = 2
+        elif any(kw in aria_label for kw in ["próxima", "next", "page 2", "página 2"]):
+            score += 6
+            detected_page_num = 2
+
+        href_lower = href.lower()
+        for param in ["pagination=", "pagina=", "page=", "pag=", "pg="]:
+            if param in href_lower:
+                m = re.search(rf"{re.escape(param)}(\d+)", href_lower)
+                if m:
+                    score += 5
+                    if not detected_page_num:
+                        detected_page_num = int(m.group(1))
+                break
+
+        # Check parent for pagination container
+        try:
+            parent = link.parent
+            for _ in range(3):
+                if parent is None:
+                    break
+                parent_classes = ""
+                try:
+                    parent_classes = (parent.attrib.get("class", "") or "").lower()
+                except Exception:
+                    pass
+                parent_tag = ""
+                try:
+                    parent_tag = getattr(parent, "tag", "")
+                except Exception:
+                    pass
+                if any(kw in parent_classes for kw in ["paginat", "pagina", "pager", "page-nav", "pages"]):
+                    score += 4
+                if parent_tag == "nav":
+                    score += 2
+                try:
+                    parent = parent.parent
+                except Exception:
+                    break
+        except Exception:
+            pass
+
+        if score > 0 and detected_page_num >= 2:
+            candidates.append((score, href, text, detected_page_num))
+
+    if candidates:
+        candidates.sort(key=lambda x: (-x[0], x[3]))
+        best = candidates[0]
+        log.info(f"  Paginação DOM (link): {best[1]} (score={best[0]}, text='{best[2]}', pag={best[3]})")
+        return (best[1], best[3])
+
+    # ── PARTE B: <button> de paginação (MUI, React, etc.) ────────────────────
+    # Muitos SPAs (Next.js, React) usam <button> ao invés de <a> para paginação.
+    # Detectamos botões com texto numérico dentro de containers de paginação.
+    try:
+        button_page_nums: list[int] = []
+        pagination_selectors = [
+            "nav button",
+            ".pagination button",
+            "[class*=paginat] button",
+            "[class*=Pagination] button",
+            "[class*=page-nav] button",
+            "[class*=pager] button",
+            "button[class*=page]",
+            "button[class*=Page]",
+        ]
+        for sel in pagination_selectors:
+            try:
+                buttons = page.css(sel)
+                for btn in buttons:
+                    text = ""
+                    try:
+                        text = (btn.text or "").strip()
+                    except Exception:
+                        continue
+                    if text.isdigit():
+                        num = int(text)
+                        if 1 <= num <= 500:
+                            button_page_nums.append(num)
+            except Exception:
+                continue
+
+        if button_page_nums:
+            max_page = max(button_page_nums)
+            has_page_2 = 2 in button_page_nums
+            if has_page_2 and max_page >= 2:
+                log.info(f"  Paginação DOM (button): detectados botões de pág, max={max_page}")
+                return ("__BUTTON_PAGINATION__", max_page)
+    except Exception:
+        pass
+
+    # ── PARTE C: "Carregar mais" / "Load more" / "Ver mais" botões ───────
+    # Esses indicam infinite scroll ou lazy loading — probar com query params
+    try:
+        for el in page.css("button, a[href], [role=button]"):
+            text = ""
+            try:
+                text = (el.text or "").strip().lower()
+            except Exception:
+                continue
+            if any(kw in text for kw in ["carregar mais", "ver mais", "mostrar mais",
+                                          "load more", "show more", "mais imóveis",
+                                          "mais imoveis"]):
+                log.info(f"  Paginação DOM: botão '{text.strip()[:40]}' detectado → probing query params")
+                return ("__BUTTON_PAGINATION__", 2)
+    except Exception:
+        pass
+
+    return None
+
+
 # ─── Discovery: encontrar URLs de imóveis ────────────────────────────────────
 
 # Fallback — tentamos esses se o LLM não achar nada
@@ -210,8 +612,8 @@ LISTING_CANDIDATES_SUFFIXES = [
 
 # Regex para achar link da página 2 no HTML
 PAGINATION_PATTERNS_PAGE2 = [
-    r'href=["\']([^"\']*(?:pagina|page|pag|pg)[=/]2[^"\']*)["\']',
-    r'href=["\']([^"\']*[?&](?:pagina|page|pag|pg)=2[^"\']*)["\']',
+    r'href=["\']([^"\']*(?:pagina|page|pag|pg|pagination)[=/]2[^"\']*)["\']',
+    r'href=["\']([^"\']*[?&](?:pagina|page|pag|pg|pagination)=2[^"\']*)["\']',
 ]
 
 
@@ -308,7 +710,7 @@ REGRAS:
                 {"role": "system", "content": "Você é um especialista em análise de sites imobiliários brasileiros. Retorne SOMENTE JSON válido, sem markdown."},
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=500,
+            max_tokens=1500,
         )
 
         if not answer:
@@ -379,18 +781,20 @@ def discover_property_urls(
     progress(f"Site: {base_url}")
     progress(f"{'─'*50}")
 
-    listing_urls: list[str] = []  # URLs de listagem confirmadas
+    listing_urls: list[str] = []  # URLs de listagem confirmadas (URL final pós-redirect)
+    listing_cache: dict[str, tuple] = {}  # {url_final: (page, links)} — cache da Fase 1
+    listing_tipos: dict[str, str] = {}  # {url_final: tipo} — para dedup por tipo
     llm_pagination_hint: Optional[dict] = None  # Dica de paginação do LLM
-    used_stealth = False
+
+    # SEMPRE usa Playwright — renderiza JS, SPAs, botões, tudo.
+    used_stealth = True
+
+    # Conjunto de URLs finais já vistas (para dedup de redirects)
+    seen_final_urls: set[str] = set()
 
     # 1a. Fetch homepage e pedir LLM para analisar
-    progress(f"  Buscando homepage: {base_url}")
-    homepage = fetch_page(base_url, stealth=False)
-    if homepage and not has_real_content(homepage):
-        progress(f"  ↳ Homepage sem conteúdo, tentando stealth...")
-        homepage = fetch_page(base_url, stealth=True)
-        if homepage:
-            used_stealth = True
+    progress(f"  Buscando homepage (Playwright): {base_url}")
+    homepage = fetch_page(base_url, stealth=True)
 
     if homepage:
         homepage_html = safe_html(homepage)
@@ -410,13 +814,29 @@ def discover_property_urls(
                 if not llm_url or not llm_url.startswith("http"):
                     continue
 
+                # Pré-check: se a URL crua já é uma URL final conhecida, pular sem fetch
+                if llm_url in seen_final_urls:
+                    progress(f"  Pulando listagem ({lst_tipo}): {llm_url} (já vista)")
+                    continue
+
                 progress(f"  Testando listagem ({lst_tipo}): {llm_url}")
-                llm_page = fetch_page(llm_url, stealth=used_stealth)
+                llm_page = fetch_page(llm_url, stealth=True)
                 if llm_page:
+                    # URL final pós-redirect (ex: /alugar/ → /alugar/cidade/caxias-do-sul/1/)
+                    final_url = getattr(llm_page, 'url', llm_url) or llm_url
+                    if final_url in seen_final_urls:
+                        progress(f"  ↳ Duplicada (redireciona para URL já vista), pulando")
+                        continue
+                    seen_final_urls.add(final_url)
+                    seen_final_urls.add(llm_url)  # Guardar URL original também
+
                     links = extract_detail_links(llm_page, base_hostname)
                     progress(f"  ↳ {len(links)} imóveis encontrados")
                     if len(links) >= 1:
-                        listing_urls.append(llm_url)
+                        listing_urls.append(final_url)
+                        listing_tipos[final_url] = lst_tipo
+                        # Cache: salvar page + links para reutilizar na Fase 2
+                        listing_cache[final_url] = (llm_page, links)
                     else:
                         progress(f"  ↳ 0 imóveis, descartando")
                 else:
@@ -429,23 +849,53 @@ def discover_property_urls(
             candidate = f"{base_url}{suffix}"
             progress(f"    Tentando: {candidate}")
 
-            page = fetch_page(candidate, stealth=False)
-            if page and not has_real_content(page):
-                page = fetch_page(candidate, stealth=True)
-                if page:
-                    used_stealth = True
-
+            page = fetch_page(candidate, stealth=True)
             if not page:
                 continue
+
+            final_url = getattr(page, 'url', candidate) or candidate
+            if final_url in seen_final_urls:
+                continue
+            seen_final_urls.add(final_url)
 
             links = extract_detail_links(page, base_hostname)
             progress(f"    ↳ {len(links)} imóveis")
 
             if len(links) >= 1:
-                listing_urls.append(candidate)
+                listing_urls.append(final_url)
+                listing_cache[final_url] = (page, links)
 
-    # Deduplicate listing URLs
+    # Deduplicate listing URLs (já são URLs finais, mas por segurança)
     listing_urls = list(dict.fromkeys(listing_urls))
+
+    # ── Dedup por tipo: manter apenas a URL mais abrangente por tipo ──
+    # (evita 10+ subcategorias do mesmo tipo, ex: venda/terreno, venda/casa, etc.)
+    if len(listing_urls) > 2:
+        from collections import defaultdict
+        tipo_groups: dict[str, list[tuple[str, int]]] = defaultdict(list)
+        for url in listing_urls:
+            raw_tipo = listing_tipos.get(url, "?").lower()
+            if "venda" in raw_tipo or "compra" in raw_tipo:
+                norm_tipo = "venda"
+            elif "alug" in raw_tipo or "loca" in raw_tipo:
+                norm_tipo = "alugar"
+            else:
+                norm_tipo = raw_tipo
+            link_count = len(listing_cache.get(url, (None, []))[1])
+            tipo_groups[norm_tipo].append((url, link_count))
+
+        filtered: list[str] = []
+        for tipo, group in tipo_groups.items():
+            group.sort(key=lambda x: x[1], reverse=True)
+            best_url, best_count = group[0]
+            filtered.append(best_url)
+            if len(group) > 1:
+                progress(f"  Tipo '{tipo}': mantendo {best_url} ({best_count} links)")
+                progress(f"    Removidas {len(group)-1} subcategorias")
+
+        if len(filtered) < len(listing_urls):
+            progress(f"  Dedup por tipo: {len(listing_urls)} → {len(filtered)} listagens")
+            listing_urls = filtered
 
     if not listing_urls:
         progress("✗ Nenhuma listagem encontrada")
@@ -460,38 +910,82 @@ def discover_property_urls(
     progress(f"FASE 2: Paginação")
     progress(f"{'─'*50}")
 
+    # Template de paginação confirmado na listagem anterior (reutilizar)
+    confirmed_template: Optional[str] = None
+
     for listing_idx, listing_url in enumerate(listing_urls, 1):
         progress(f"\n  📂 Listagem {listing_idx}/{len(listing_urls)}: {listing_url}")
 
-        page = fetch_page(listing_url, stealth=used_stealth)
-        if not page:
-            progress(f"    ✗ Sem resposta")
-            continue
+        # Usar cache da Fase 1 se disponível (evita re-fetch da pág 1)
+        if listing_url in listing_cache:
+            page, page1_links = listing_cache[listing_url]
+            progress(f"    (usando cache da Fase 1)")
+        else:
+            page = fetch_page(listing_url, stealth=used_stealth)
+            if not page:
+                progress(f"    ✗ Sem resposta")
+                continue
+            page1_links = extract_detail_links(page, base_hostname)
 
-        page1_links = extract_detail_links(page, base_hostname)
         before_count = len(all_detail_urls)
         for link in page1_links:
             all_detail_urls.add(link)
         new_p1 = len(all_detail_urls) - before_count
         progress(f"    Pág 1: +{new_p1} novos (total: {len(all_detail_urls)})")
 
+        # Se página 1 não trouxe nenhum URL novo, pular paginação inteira
+        # (mesmos imóveis de outra listagem já processada)
+        if new_p1 == 0 and listing_idx > 1:
+            progress(f"    ↳ Sem novos — pulando paginação desta listagem")
+            continue
+
         # Detectar paginação: primeiro tenta com hint do LLM, depois detecção auto
         page2_url = None
+        used_llm_hint = False  # Flag: paginação veio do LLM hint?
+        p1_page = page  # Guardar page 1 DOM para fallback
 
-        # 2a. LLM hint: usar a URL de exemplo de paginação
-        if llm_pagination_hint and listing_idx == 1:
+        # 2a. LLM hint: adaptar a URL de paginação para esta listagem
+        if llm_pagination_hint:
             hint_page2 = llm_pagination_hint.get("exemplo_pagina2")
             hint_tipo = llm_pagination_hint.get("tipo", "nenhuma")
             hint_param = llm_pagination_hint.get("parametro")
 
+            # Adaptar o hint para a listagem atual (ex: /alugar/.../2/ → /comprar/.../2/)
             if hint_page2 and hint_page2 != "null" and hint_page2.startswith("http"):
+                # Para listagem 1, usar hint direto. Para as demais, construir a URL equivalente.
+                if listing_idx > 1 and hint_tipo == "path_segment":
+                    # Tentar construir pág 2 substituindo o último segmento numérico
+                    # Ex: listing_url = /comprar/cidade/caxias-do-sul/1/ → /comprar/cidade/caxias-do-sul/2/
+                    adapted_url = re.sub(r'/1/?$', '/2/', listing_url.rstrip('/') + '/')
+                    if adapted_url != listing_url.rstrip('/') + '/':
+                        hint_page2 = adapted_url
+                    else:
+                        # Append /2/ ao final
+                        hint_page2 = listing_url.rstrip('/') + '/2/'
+                elif listing_idx > 1 and hint_tipo == "query_param":
+                    # Extrair query params do hint e aplicar à URL da listagem atual
+                    hint_parsed = urlparse(hint_page2)
+                    if hint_parsed.query:
+                        sep = "&" if "?" in listing_url else "?"
+                        hint_page2 = f"{listing_url}{sep}{hint_parsed.query}"
+
                 progress(f"    🤖 Testando paginação do LLM: {hint_page2}")
                 p2 = fetch_page(hint_page2, stealth=used_stealth)
                 if p2:
                     p2_links = extract_detail_links(p2, base_hostname)
                     if p2_links:
-                        progress(f"    ✓ Paginação LLM funcionou: {len(p2_links)} imóveis na pág 2")
-                        page2_url = hint_page2
+                        # Validar: se pág 2 tem links mas NENHUM novo, não é paginação real
+                        # (site pode ignorar o param e retornar a mesma página)
+                        p2_new = [l for l in p2_links if l not in all_detail_urls]
+                        if p2_new:
+                            progress(f"    ✓ Paginação LLM funcionou: {len(p2_links)} imóveis na pág 2")
+                            page2_url = hint_page2
+                            used_llm_hint = True
+                            for l in p2_links:
+                                all_detail_urls.add(l)
+                            progress(f"    Pág 2: +{len(p2_new)} novos (total: {len(all_detail_urls)})")
+                        else:
+                            progress(f"    ✗ Paginação LLM retornou mesmos imóveis de pág 1 — ignorando")
                     else:
                         progress(f"    ✗ Paginação LLM sem imóveis")
                 else:
@@ -508,19 +1002,111 @@ def discover_property_urls(
                 if p2:
                     p2_links = extract_detail_links(p2, base_hostname)
                     if p2_links:
-                        progress(f"    ✓ Paginação construída funcionou: {len(p2_links)} imóveis")
-                        page2_url = constructed
+                        p2_new = [l for l in p2_links if l not in all_detail_urls]
+                        if p2_new:
+                            progress(f"    ✓ Paginação construída funcionou: {len(p2_links)} imóveis")
+                            page2_url = constructed
+                            used_llm_hint = True
+                            for l in p2_links:
+                                all_detail_urls.add(l)
+                            progress(f"    Pág 2: +{len(p2_new)} novos (total: {len(all_detail_urls)})")
+                        else:
+                            progress(f"    ✗ Paginação construída retornou mesmos imóveis — ignorando")
         
         # 2b. Detecção automática (fallback se LLM hint não funcionou)
         if not page2_url:
-            page2_url = _detect_page2_url(page, listing_url, base_hostname)
+            page2_url = _detect_page2_url(
+                page, listing_url, base_hostname,
+                use_stealth=True,
+                llm_pagination_hint=llm_pagination_hint,
+                page1_links=set(page1_links),
+            )
 
         if not page2_url:
-            progress(f"    Sem paginação detectada")
+            progress(f"    Sem paginação por URL detectada")
+
+            # ── Fallback: infinite scroll / "Carregar mais" ──────────────
+            # Se a paginação por URL falhou, tenta carregar mais via scroll/click.
+            # Detectar se a página tem botão "Carregar mais" ou similar
+            has_load_more = False
+            try:
+                for el in page.css("button, a[href], [role=button]"):
+                    text = ""
+                    try:
+                        text = (el.text or "").strip().lower()
+                    except Exception:
+                        continue
+                    if any(kw in text for kw in ["carregar mais", "ver mais", "mostrar mais",
+                                                  "load more", "show more", "mais imóveis",
+                                                  "mais imoveis"]):
+                        has_load_more = True
+                        break
+            except Exception:
+                pass
+
+            if has_load_more:
+                progress(f"    📜 Detectado infinite scroll — carregando via scroll/click...")
+                scroll_page = fetch_page_with_scroll(listing_url, max_scrolls=50, on_progress=progress)
+                if scroll_page:
+                    scroll_links = extract_detail_links(scroll_page, base_hostname)
+                    new_scroll = [l for l in scroll_links if l not in all_detail_urls]
+                    for l in scroll_links:
+                        all_detail_urls.add(l)
+                    progress(f"    📜 Scroll: +{len(new_scroll)} novos (total: {len(all_detail_urls)})")
+                else:
+                    progress(f"    ✗ Scroll falhou")
+            else:
+                # ── Fallback 2: JS pagination (href="#" com números de página) ──
+                # Detectar botões de paginação JavaScript
+                has_js_pagination = False
+                try:
+                    for container in page.css("#pagination, .pagination, [class*=paginat]"):
+                        page_links = container.css("a")
+                        # Verificar se há links com href="#" e texto numérico
+                        numeric_buttons = 0
+                        for a in page_links:
+                            try:
+                                href = (a.attrib.get("href", "") or "").strip()
+                                text = (a.text or "").strip()
+                                # Texto pode estar em <span> filho
+                                if not text:
+                                    spans = a.css("span")
+                                    if spans:
+                                        text = (spans[0].text or "").strip()
+                                if (href == "#" or href == "") and text.isdigit():
+                                    numeric_buttons += 1
+                            except Exception:
+                                continue
+                        if numeric_buttons >= 2:  # Pelo menos 2 botões numéricos
+                            has_js_pagination = True
+                            break
+                except Exception:
+                    pass
+
+                if has_js_pagination:
+                    progress(f"    📄 Detectado JS pagination (href='#') — clicando páginas...")
+                    js_links = fetch_page_with_js_pagination(
+                        listing_url, base_hostname, max_pages=50, on_progress=progress
+                    )
+                    new_js = [l for l in js_links if l not in all_detail_urls]
+                    for l in js_links:
+                        all_detail_urls.add(l)
+                    progress(f"    📄 JS paginação: +{len(new_js)} novos (total: {len(all_detail_urls)})")
+                else:
+                    progress(f"    Sem paginação detectada")
             continue
 
-        # Converter URL da pág 2 em template
-        template = _url_to_template(page2_url)
+        # Detectar o número da página que a URL representa
+        # (normalmente 2, mas _find_pagination_in_dom pode achar 3)
+        _detected_pn = 2  # default
+        for _pn_param in ["pagination", "pagina", "page", "pag", "pg", "p"]:
+            _pn_match = re.search(rf"[?&]{_pn_param}=(\d+)", page2_url, re.I)
+            if _pn_match:
+                _detected_pn = int(_pn_match.group(1))
+                break
+
+        # Converter URL da pág N em template
+        template = _url_to_template(page2_url, page_num=_detected_pn)
         if template:
             progress(f"    Template: {template}")
         else:
@@ -528,38 +1114,183 @@ def discover_property_urls(
             continue
 
         # Navegar todas as páginas
+        # Se pág 2 já foi processada pelo LLM hint (links já adicionados), começar da 3
+        # Se pág 2 veio de _detect_page2_url, NÃO pular (links não foram adicionados)
+        # Usa Playwright até confirmar que o template funciona (2 págs com resultados),
+        # depois muda para HTTP puro (~1s vs ~5-30s por página).
         empty_pages = 0
-        page_num = 2
+        page_num = _detected_pn + 1 if (page2_url and used_llm_hint) else _detected_pn  # Pular pág 2 só se LLM hint já processou
+        template_confirmed = confirmed_template is not None and listing_idx > 1
+        consecutive_ok = 1 if (page2_url and used_llm_hint) else 0  # Pág 2 do hint já conta
+        useful_pages = 2 if (page2_url and used_llm_hint) else 1  # Contador de págs com resultados
+        stealth_required = False  # SPA detectado: HTTP não retorna links
 
         while page_num <= MAX_PAGES and empty_pages < 2:
             page_url = template.replace("{N}", str(page_num))
 
-            page = fetch_page(page_url, stealth=used_stealth)
+            # Depois de confirmar template, usar HTTP puro (10x mais rápido)
+            # Exceto se SPA detectado (HTTP retorna 0 links)
+            use_stealth = True if (not template_confirmed or stealth_required) else False
+            page = fetch_page(page_url, stealth=use_stealth)
+
+            # Se HTTP falhou mas template confirmado, tentar Playwright como fallback
+            if not page and template_confirmed:
+                page = fetch_page(page_url, stealth=True)
+
             if not page:
                 progress(f"    Pág {page_num}: ✗ sem resposta, parando")
                 break
 
             links = extract_detail_links(page, base_hostname)
+
+            # SPA detection: HTTP retornou página mas 0 links → tentar Playwright
+            if not links and template_confirmed and not use_stealth and not stealth_required:
+                page = fetch_page(page_url, stealth=True)
+                if page:
+                    links = extract_detail_links(page, base_hostname)
+                    if links:
+                        stealth_required = True
+                        progress(f"    (SPA detectado: HTTP vazio, usando Playwright)")
+
             new_links = [l for l in links if l not in all_detail_urls]
 
             if not new_links:
                 empty_pages += 1
                 progress(f"    Pág {page_num}: 0 novos ({empty_pages}/2 vazias)")
+                consecutive_ok = 0
             else:
                 empty_pages = 0
+                consecutive_ok += 1
+                useful_pages += 1
                 for l in links:
                     all_detail_urls.add(l)
                 progress(f"    Pág {page_num}: +{len(new_links)} novos (total: {len(all_detail_urls)})")
 
+                # Confirmar template depois de 2 págs consecutivas com resultados
+                if not template_confirmed and consecutive_ok >= 2:
+                    template_confirmed = True
+                    progress(f"    ✓ Template confirmado — acelerando com HTTP")
+
             page_num += 1
 
+        # ── FALLBACK: se paginação LLM foi fraca, tentar auto-detecção ──────
+        # Se o LLM sugeriu ?page=N mas o correto era ?pagination=N (ou outro),
+        # a paginação morre rápido. Nesse caso, tentar auto-detect via DOM/probing.
+        if used_llm_hint and useful_pages <= 3 and p1_page:
+            progress(f"    ⚠️ Paginação LLM fraca ({useful_pages} págs úteis), tentando auto-detecção...")
+            fallback_p2 = _detect_page2_url(
+                p1_page, listing_url, base_hostname,
+                use_stealth=True,
+                llm_pagination_hint=None,  # Ignorar hint para forçar probing
+                page1_links=set(page1_links),
+            )
+            if fallback_p2:
+                fallback_template = _url_to_template(fallback_p2, page_num=2)
+                if fallback_template and fallback_template != template:
+                    progress(f"    ⚡ Auto-detecção achou template diferente: {fallback_template}")
+                    # Processar pág 2 do fallback
+                    fb_page = fetch_page(fallback_p2, stealth=True)
+                    if fb_page:
+                        fb_links = extract_detail_links(fb_page, base_hostname)
+                        fb_new = [l for l in fb_links if l not in all_detail_urls]
+                        for l in fb_links:
+                            all_detail_urls.add(l)
+                        if fb_new:
+                            progress(f"    Pág 2 (fallback): +{len(fb_new)} novos (total: {len(all_detail_urls)})")
+
+                        # Re-paginar com template correto
+                        template = fallback_template
+                        page_num = 3
+                        empty_pages = 0
+                        template_confirmed = False
+                        consecutive_ok = 1 if fb_new else 0
+
+                        while page_num <= MAX_PAGES and empty_pages < 2:
+                            page_url = template.replace("{N}", str(page_num))
+                            use_stealth_fb = True if (not template_confirmed or stealth_required) else False
+                            pg = fetch_page(page_url, stealth=use_stealth_fb)
+                            if not pg and template_confirmed:
+                                pg = fetch_page(page_url, stealth=True)
+                            if not pg:
+                                progress(f"    Pág {page_num}: ✗ sem resposta, parando")
+                                break
+                            fb_lnks = extract_detail_links(pg, base_hostname)
+                            # SPA detection no fallback
+                            if not fb_lnks and template_confirmed and not use_stealth_fb and not stealth_required:
+                                pg = fetch_page(page_url, stealth=True)
+                                if pg:
+                                    fb_lnks = extract_detail_links(pg, base_hostname)
+                                    if fb_lnks:
+                                        stealth_required = True
+                                        progress(f"    (SPA detectado no fallback: usando Playwright)")
+                            fb_new_lnks = [l for l in fb_lnks if l not in all_detail_urls]
+                            if not fb_new_lnks:
+                                empty_pages += 1
+                                progress(f"    Pág {page_num}: 0 novos ({empty_pages}/2 vazias)")
+                                consecutive_ok = 0
+                            else:
+                                empty_pages = 0
+                                consecutive_ok += 1
+                                for l in fb_lnks:
+                                    all_detail_urls.add(l)
+                                progress(f"    Pág {page_num}: +{len(fb_new_lnks)} novos (total: {len(all_detail_urls)})")
+                                if not template_confirmed and consecutive_ok >= 2:
+                                    template_confirmed = True
+                                    progress(f"    ✓ Template fallback confirmado — acelerando com HTTP")
+                            page_num += 1
+                else:
+                    progress(f"    Auto-detecção: mesmo template ou sem resultado")
+            else:
+                # Tentar JS pagination (href="#") como último recurso
+                _js_pag_found = False
+                if p1_page:
+                    try:
+                        for sel in ["#pagination", ".pagination", ".paginacao", "[class*=pagina]", "nav[aria-label*=pag]", "ul.pages"]:
+                            container = p1_page.css(sel)
+                            if not container:
+                                continue
+                            numeric_buttons = 0
+                            for a in container[0].css("a"):
+                                try:
+                                    href = (a.attrib.get("href", "") or "").strip()
+                                    text = (a.text or "").strip()
+                                    # Texto pode estar em <span> filho
+                                    if not text:
+                                        spans = a.css("span")
+                                        if spans:
+                                            text = (spans[0].text or "").strip()
+                                    if (href == "#" or href == "") and text.isdigit():
+                                        numeric_buttons += 1
+                                except Exception:
+                                    continue
+                            if numeric_buttons >= 2:
+                                _js_pag_found = True
+                                break
+                    except Exception:
+                        pass
+
+                if _js_pag_found:
+                    progress(f"    📄 Detectado JS pagination (fallback) — clicando páginas...")
+                    js_links = fetch_page_with_js_pagination(
+                        listing_url, base_hostname, max_pages=50, on_progress=progress
+                    )
+                    new_js = [l for l in js_links if l not in all_detail_urls]
+                    for l in js_links:
+                        all_detail_urls.add(l)
+                    progress(f"    📄 JS paginação: +{len(new_js)} novos (total: {len(all_detail_urls)})")
+                else:
+                    progress(f"    Auto-detecção: sem paginação encontrada")
+
+        # Salvar template confirmado para reutilizar nas listagens seguintes
+        if template_confirmed and confirmed_template is None:
+            confirmed_template = template
+            progress(f"    (template salvo para próximas listagens)")
+
         # Para as listagens subsequentes, aplicar hint de paginação baseado no param
-        # Ex: se /comprar?page=2 funcionou, /alugar?page=2 provavelmente também
-        if llm_pagination_hint and page2_url and listing_idx == 1:
-            # Extrair o padrão de paginação que funcionou
+        if llm_pagination_hint and page2_url:
             _detected_param = None
-            for param in ["page", "pagina", "pag", "pg"]:
-                if f"{param}=2" in page2_url:
+            for param in ["page", "pagina", "pag", "pg", "pagination"]:
+                if f"{param}=" in page2_url and re.search(rf"{param}=\d+", page2_url):
                     _detected_param = param
                     break
             if _detected_param and not llm_pagination_hint.get("parametro"):
@@ -570,10 +1301,78 @@ def discover_property_urls(
     return list(all_detail_urls)
 
 
-def _detect_page2_url(page, listing_url: str, base_hostname: str) -> Optional[str]:
-    """Detecta o URL da página 2 da paginação."""
+def _detect_page2_url(
+    page, listing_url: str, base_hostname: str,
+    use_stealth: bool = False,
+    llm_pagination_hint: Optional[dict] = None,
+    page1_links: Optional[set] = None,
+) -> Optional[str]:
+    """
+    Detecta o URL da página 2 da paginação.
+    
+    Suporta:
+    - <a href> com query param de paginação
+    - <button> de paginação (MUI, React) → probe com parâmetros comuns
+    - Regex no HTML
+    - Probes com padrões comuns
+    
+    page1_links: conjunto de URLs da página 1 para validar que página 2 é DIFERENTE.
+    """
+    _p1 = page1_links or set()
     if not page:
         return None
+
+    # 0. Procurar links/botões de paginação no DOM renderizado
+    dom_result = _find_pagination_in_dom(page, listing_url, base_hostname)
+    if dom_result:
+        dom_url, dom_page_num = dom_result
+
+        # Se é paginação via <a href> (URL real), usar diretamente
+        if dom_url != "__BUTTON_PAGINATION__":
+            log.info(f"  Paginação via DOM (link): {dom_url} (pág {dom_page_num})")
+            return dom_url
+
+        # Paginação via <button> (sem href) — precisamos descobrir o parâmetro
+        log.info(f"  Paginação via DOM (button): {dom_page_num} páginas detectadas, probing parâmetros...")
+
+        # Primeiro: usar hint do LLM se disponível
+        if llm_pagination_hint:
+            hint_param = llm_pagination_hint.get("parametro")
+            hint_page2 = llm_pagination_hint.get("exemplo_pagina2")
+            if hint_page2 and hint_page2.startswith("http"):
+                log.info(f"    Probe LLM hint: {hint_page2}")
+                p2 = fetch_page(hint_page2, stealth=use_stealth)
+                if p2:
+                    links = extract_detail_links(p2, base_hostname)
+                    if links:
+                        log.info(f"    ✓ LLM hint funcionou: {len(links)} imóveis")
+                        return hint_page2
+            if hint_param:
+                sep = "&" if "?" in listing_url else "?"
+                probe = f"{listing_url}{sep}{hint_param}=2"
+                log.info(f"    Probe LLM param ({hint_param}): {probe}")
+                p2 = fetch_page(probe, stealth=use_stealth)
+                if p2:
+                    links = extract_detail_links(p2, base_hostname)
+                    if links:
+                        log.info(f"    ✓ LLM param funcionou: {len(links)} imóveis")
+                        return probe
+
+        # Segundo: probe com nomes de parâmetro comuns
+        for param in ["pagination", "page", "pagina", "pag", "pg"]:
+            sep = "&" if "?" in listing_url else "?"
+            probe = f"{listing_url}{sep}{param}=2"
+            log.info(f"    Probe button ({param}): {probe}")
+            p2 = fetch_page(probe, stealth=use_stealth)
+            if p2:
+                links = extract_detail_links(p2, base_hostname)
+                if links:
+                    log.info(f"    ✓ Probe {param} funcionou: {len(links)} imóveis na pág 2")
+                    return probe
+                else:
+                    log.debug(f"    ✗ {param}=2 sem imóveis")
+
+        log.info(f"    ✗ Nenhum parâmetro de paginação funcionou para botões")
 
     html = safe_html(page)
 
@@ -590,6 +1389,7 @@ def _detect_page2_url(page, listing_url: str, base_hostname: str) -> Optional[st
     # 2. Buscar via seletores CSS (query params)
     pagination_selectors = [
         'a[href*="pagina=2"]', 'a[href*="page=2"]', 'a[href*="pag=2"]',
+        'a[href*="pagination=2"]',
         'a[href*="/pagina/2"]', 'a[href*="/page/2"]', 'a[href*="/pag/2"]',
     ]
     try:
@@ -605,80 +1405,126 @@ def _detect_page2_url(page, listing_url: str, base_hostname: str) -> Optional[st
     except Exception:
         pass
 
-    # 3. Path-based pagination: a listing URL termina com /N/ (ex: /comprar/cidade/caxias/1/)
-    #    Tentar trocar o último segmento numérico por "2"
+    # 3. Probe: tentar padrões comuns de query string (ANTES de path-based)
+    # Query params são mais confiáveis que path append, que pode confundir
+    # filtros de tipo (/imoveis/2/ = tipo, não página) com paginação.
+    for param in ["page", "pagina", "pagination", "pag", "pg"]:
+        sep = "&" if "?" in listing_url else "?"
+        probe_url = f"{listing_url}{sep}{param}=2"
+        log.debug(f"  Probe query ({param}): {probe_url}")
+        p2 = fetch_page(probe_url, stealth=use_stealth)
+        if p2:
+            links = extract_detail_links(p2, base_hostname)
+            if links:
+                # Validar: links da pág 2 devem ser DIFERENTES da pág 1
+                # Sites que ignoram ?page=N retornam os mesmos imóveis
+                p2_new = [l for l in links if l not in _p1]
+                if p2_new:
+                    # Validação extra: verificar página 3 também tem links novos
+                    # Sites que ignoram ?page=N retornam sempre a mesma coisa
+                    all_so_far = _p1 | set(links)
+                    probe3_url = f"{listing_url}{sep}{param}=3"
+                    p3 = fetch_page(probe3_url, stealth=use_stealth)
+                    if p3:
+                        p3_links = extract_detail_links(p3, base_hostname)
+                        p3_new = [l for l in p3_links if l not in all_so_far]
+                        if p3_new:
+                            log.info(f"  ✓ Paginação query probe funcionou ({param}): pág2={len(links)}, pág3={len(p3_links)}, novos_p3={len(p3_new)} — {probe_url}")
+                            return probe_url
+                        else:
+                            log.info(f"  ✗ Probe ({param}): pág 2 OK ({len(p2_new)} novos) mas pág 3 repetida — site ignora paginação")
+                    else:
+                        # Página 3 falhou — aceitar página 2 com cautela
+                        log.info(f"  ✓ Paginação query probe ({param}): {len(links)} imóveis (+{len(p2_new)} novos, pág 3 sem resposta) — {probe_url}")
+                        return probe_url
+                else:
+                    log.info(f"  ✗ Probe ({param}) retornou mesmos {len(links)} imóveis da pág 1 — ignorando")
+
+    # 4. Path-based pagination (último segmento já é número)
     parsed = urlparse(listing_url)
     path = parsed.path.rstrip("/")
     segments = path.split("/")
     
-    # Caso: URL termina com número (ex: /comprar/cidade/caxias-do-sul/1)
     if segments and re.match(r"^\d+$", segments[-1]):
         segments[-1] = "2"
         page2_path = "/".join(segments) + "/"
         page2_url = f"https://{base_hostname}{page2_path}"
         log.info(f"  Tentando paginação path-based: {page2_url}")
-        page2 = fetch_page(page2_url, stealth=False)
+        page2 = fetch_page(page2_url, stealth=use_stealth)
         if page2:
             links = extract_detail_links(page2, base_hostname)
             if links:
-                log.info(f"  ✓ Paginação path-based funcionou: {len(links)} imóveis na pág 2")
-                return page2_url
+                p2_new = [l for l in links if l not in _p1]
+                if p2_new:
+                    log.info(f"  ✓ Paginação path-based funcionou: {len(links)} imóveis (+{len(p2_new)} novos)")
+                    return page2_url
+                else:
+                    log.info(f"  ✗ Path-based retornou mesmos imóveis da pág 1 — ignorando")
 
-    # 4. Tentar ADICIONAR /2/ no final (ex: /comprar/cidade/caxias-do-sul → .../2/)
+    # 5. Tentar ADICIONAR /2/ no final (com validação de redirect)
     probe_url = f"{listing_url.rstrip('/')}/2/"
     log.debug(f"  Probe append /2/: {probe_url}")
-    page2 = fetch_page(probe_url, stealth=False)
+    page2 = fetch_page(probe_url, stealth=use_stealth)
     if page2:
-        links = extract_detail_links(page2, base_hostname)
-        if links:
-            log.info(f"  ✓ Paginação path-append funcionou: {len(links)} imóveis na pág 2")
-            return probe_url
-
-    # 5. Probe: tentar padrões comuns de query string
-    probe_patterns = [
-        f"{listing_url}?pagina=2",
-        f"{listing_url}?page=2",
-    ]
-    for probe_url in probe_patterns:
-        page2 = fetch_page(probe_url, stealth=False)
-        if page2:
+        # Verificar se houve redirect: se o URL final é muito diferente,
+        # provavelmente /2/ é um filtro (tipo=2), não paginação
+        final_url = getattr(page2, 'url', probe_url) or probe_url
+        probe_path = urlparse(probe_url).path.rstrip("/")
+        final_path = urlparse(final_url).path.rstrip("/")
+        if final_path != probe_path:
+            log.info(f"  ✗ Probe /2/ redirecionou ({final_url}), ignorando (provável filtro, não paginação)")
+        else:
             links = extract_detail_links(page2, base_hostname)
             if links:
-                log.info(f"  ✓ Paginação probe funcionou: {probe_url}")
-                return probe_url
+                p2_new = [l for l in links if l not in _p1]
+                if p2_new:
+                    log.info(f"  ✓ Paginação path-append funcionou: {len(links)} imóveis (+{len(p2_new)} novos)")
+                    return probe_url
+                else:
+                    log.info(f"  ✗ Path-append retornou mesmos imóveis da pág 1 — ignorando")
 
     return None
 
 
-def _url_to_template(page2_url: str) -> Optional[str]:
-    """Converte URL da pág 2 em template com {N}."""
-    # Query-based patterns
-    replacements = [
-        (r"([?&]pagina=)2(&|$)", r"\g<1>{N}\g<2>"),
-        (r"([?&]page=)2(&|$)", r"\g<1>{N}\g<2>"),
-        (r"([?&]pag=)2(&|$)", r"\g<1>{N}\g<2>"),
-        (r"([?&]pg=)2(&|$)", r"\g<1>{N}\g<2>"),
-        (r"(/pagina/)2(/|$)", r"\g<1>{N}\g<2>"),
-        (r"(/page/)2(/|$)", r"\g<1>{N}\g<2>"),
-        (r"(/pag/)2(/|$)", r"\g<1>{N}\g<2>"),
-        (r"(/pg/)2(/|$)", r"\g<1>{N}\g<2>"),
-    ]
-    for pattern, replacement in replacements:
-        if re.search(pattern, page2_url):
-            return re.sub(pattern, replacement, page2_url)
+def _url_to_template(page2_url: str, page_num: int = 2) -> Optional[str]:
+    """Converte URL da página N em template com {N}."""
+    pn = str(page_num)
 
-    # Path-based: último segmento é "2" → trocar por {N}
-    # Ex: /comprar/cidade/caxias-do-sul/2/ → /comprar/cidade/caxias-do-sul/{N}/
+    # Query-based patterns (nomes conhecidos de parâmetros de paginação)
+    known_params = ["pagina", "page", "pag", "pg", "pagination", "p"]
+    for param in known_params:
+        pattern = rf"([?&]{param}=){pn}(&|$)"
+        if re.search(pattern, page2_url, re.I):
+            return re.sub(pattern, r"\g<1>{N}\g<2>", page2_url, flags=re.I)
+
+    # Path-based patterns
+    path_params = ["pagina", "page", "pag", "pg"]
+    for param in path_params:
+        pattern = rf"(/{param}/){pn}(/|$)"
+        if re.search(pattern, page2_url, re.I):
+            return re.sub(pattern, r"\g<1>{N}\g<2>", page2_url, flags=re.I)
+
+    # Path-based: último segmento é o número → trocar por {N}
     parsed = urlparse(page2_url)
     path = parsed.path.rstrip("/")
     segments = path.split("/")
-    if segments and segments[-1] == "2":
+    if segments and segments[-1] == pn:
         segments[-1] = "{N}"
         new_path = "/".join(segments) + "/"
         template = f"{parsed.scheme}://{parsed.netloc}{new_path}"
         if parsed.query:
             template += f"?{parsed.query}"
         return template
+
+    # GENERIC FALLBACK: procurar qualquer param com valor = page_num
+    # (captura params desconhecidos como "pagination", "offset", etc.)
+    skip_params = {"min", "max", "limit", "id", "cod", "ref", "ordem", "sort", "order", "tipo", "finalidade"}
+    for match in re.finditer(rf"([?&])(\w+)={pn}(&|$)", page2_url):
+        param_name = match.group(2).lower()
+        if param_name not in skip_params:
+            actual_param = match.group(2)  # Preservar case original
+            pattern = rf"([?&]{re.escape(actual_param)}=){pn}(&|$)"
+            return re.sub(pattern, r"\g<1>{N}\g<2>", page2_url)
 
     return None
 
@@ -689,6 +1535,7 @@ def scrape_property_page(
     url: str,
     fallback_cidade: Optional[str] = None,
     fallback_estado: Optional[str] = None,
+    template: Optional[SiteTemplate] = None,
 ) -> Optional[ImovelInput]:
     """
     Scrape de uma página de detalhe de imóvel.
@@ -697,7 +1544,7 @@ def scrape_property_page(
     1. Fetcher HTTP rápido (para sites SSR)
     2. StealthyFetcher (para sites com JS/Cloudflare)
     
-    Depois extrai dados via JSON-LD → CSS → LLM.
+    Depois extrai dados via Template/JSON-LD/Regex/LLM.
     """
     start = time.time()
 
@@ -715,13 +1562,15 @@ def scrape_property_page(
         return None
 
     html = safe_html(page)
+    del page  # Release Scrapling Adaptor object immediately (frees parsed DOM)
 
     if not html or len(html) < 200:
         log.warning(f"✗ HTML vazio — {url}")
         return None
 
-    # Extrair dados via pipeline cascata
-    result = extract_property_data(html, url, fallback_cidade, fallback_estado)
+    # Extrair dados via pipeline cascata (com template se disponível)
+    result = extract_property_data(html, url, fallback_cidade, fallback_estado, template=template)
+    del html  # Release HTML string after extraction
 
     elapsed = time.time() - start
 
@@ -767,6 +1616,15 @@ class CrawlStats:
             f"Falhas: {self.failed} | "
             f"Tempo: {self.elapsed_str}"
         )
+
+
+def _mem_info() -> str:
+    """Return current process RSS and system available memory."""
+    proc = psutil.Process()
+    rss_mb = proc.memory_info().rss / 1024 / 1024
+    vm = psutil.virtual_memory()
+    avail_gb = vm.available / 1024**3
+    return f"RSS={rss_mb:.0f}MB | Sys={avail_gb:.1f}GB free ({vm.percent}%)"
 
 
 def execute_crawl(
@@ -825,81 +1683,118 @@ def execute_crawl(
     urls_to_enrich = urls[:MAX_ENRICH] if MAX_ENRICH > 0 else urls
     total = len(urls_to_enrich)
 
+    # Template de CSS selectors (aprende nas primeiras 5, usa no resto)
+    template = SiteTemplate()
+
     # Tracking de qualidade
     complete_items: list[str] = []    # preço + tipo + localização
     incomplete_items: list[str] = []  # parcial
     failed_urls: list[str] = []        # erro ou sem dados
     enriched_urls: list[str] = []      # todos enriquecidos com sucesso
 
+    _lock = threading.Lock()
+    processed_count = 0
+
     progress(f"\n{'─'*50}")
     if MAX_ENRICH > 0:
         progress(f"FASE 2: Enriquecimento (limitado: {total}/{len(urls)})")
     else:
         progress(f"FASE 2: Enriquecimento ({total} imóveis)")
-    progress(f"Concorrência: {CONCURRENCY}")
+    progress(f"Workers paralelos: {CONCURRENCY}")
+    progress(f"Template learning: ativo (primeiras {SiteTemplate.LEARN_PAGES} páginas → sem LLM)")
     progress(f"{'─'*50}")
 
     _push_progress("descoberta", f"{stats.urls_found} URLs encontradas. Iniciando enriquecimento...", 0, total)
 
-    for i in range(0, total, CONCURRENCY):
-        batch = urls_to_enrich[i : i + CONCURRENCY]
-        batch_num = (i // CONCURRENCY) + 1
-        total_batches = (total + CONCURRENCY - 1) // CONCURRENCY
+    def _enrich_one(url: str) -> tuple[str, Optional[ImovelInput]]:
+        """Enriquece uma URL (roda em thread pool)."""
+        try:
+            return (url, scrape_property_page(url, cidade, estado, template=template))
+        except Exception as e:
+            log.error(f"  ✗ Erro thread {url}: {e}\n{traceback.format_exc()}")
+            return (url, None)
 
-        progress(f"\n  Batch {batch_num}/{total_batches} — {len(batch)} URLs")
+    SAVE_EVERY = max(CONCURRENCY * 5, 20)  # salvar a cada ~20 resultados (menor = menos pico de RAM)
 
-        results: list[Optional[ImovelInput]] = []
-        for url in batch:
-            try:
-                data = scrape_property_page(url, cidade, estado)
-                results.append(data)
-                if data:
-                    stats.enriched += 1
-                    enriched_urls.append(url)
-                    # Log line para o frontend
-                    label = f"{data.tipo or '?'} — {('R$' + str(int(data.preco))) if data.preco else 's/preço'} — {data.bairro or data.cidade or '?'}"
-                    recent_logs.append(f"✓ {label}")
-                    # Classificar qualidade: preço + tipo + localização = completo
-                    has_preco = data.preco is not None and data.preco > 0
-                    has_tipo = bool(data.tipo)
-                    has_local = bool(data.bairro or data.cidade)
-                    if has_preco and has_tipo and has_local:
-                        complete_items.append(url)
+    for batch_start in range(0, total, SAVE_EVERY):
+      try:
+        batch_urls = urls_to_enrich[batch_start : batch_start + SAVE_EVERY]
+        batch_num = batch_start // SAVE_EVERY + 1
+        total_batches = (total + SAVE_EVERY - 1) // SAVE_EVERY
+
+        tmpl_status = "⚡ template" if template.is_ready else f"📚 aprendendo ({template._sample_count}/{SiteTemplate.LEARN_PAGES})"
+        progress(f"\n  Batch {batch_num}/{total_batches} — {len(batch_urls)} URLs (x{CONCURRENCY} paralelo) [{tmpl_status}]")
+
+        batch_results: list[ImovelInput] = []
+
+        with ThreadPoolExecutor(max_workers=CONCURRENCY) as pool:
+            future_map = {pool.submit(_enrich_one, u): u for u in batch_urls}
+
+            for future in as_completed(future_map):
+                url_done = future_map[future]
+                try:
+                    _, data = future.result()
+                except Exception as e:
+                    data = None
+                    log.error(f"  ✗ Exceção {url_done}: {e}")
+
+                with _lock:
+                    processed_count += 1
+
+                    if data:
+                        stats.enriched += 1
+                        enriched_urls.append(url_done)
+                        batch_results.append(data)
+                        label = f"{data.tipo or '?'} — {('R$' + str(int(data.preco))) if data.preco else 's/preço'} — {data.bairro or data.cidade or '?'}"
+                        recent_logs.append(f"✓ {label}")
+                        has_preco = data.preco is not None and data.preco > 0
+                        has_tipo = bool(data.tipo)
+                        has_local = bool(data.bairro or data.cidade)
+                        if has_preco and has_tipo and has_local:
+                            complete_items.append(url_done)
+                        else:
+                            faltando = []
+                            if not has_preco: faltando.append("preço")
+                            if not has_tipo: faltando.append("tipo")
+                            if not has_local: faltando.append("localização")
+                            incomplete_items.append(f"{url_done} (falta: {', '.join(faltando)})")
                     else:
-                        faltando = []
-                        if not has_preco: faltando.append("preço")
-                        if not has_tipo: faltando.append("tipo")
-                        if not has_local: faltando.append("localização")
-                        incomplete_items.append(f"{url} (falta: {', '.join(faltando)})")
-                else:
-                    stats.failed += 1
-                    failed_urls.append(url)
-                    recent_logs.append(f"✗ sem dados")
-            except Exception as e:
-                log.error(f"  ✗ Erro {url}: {e}")
-                stats.failed += 1
-                failed_urls.append(f"{url} ({e})")
-                results.append(None)
+                        stats.failed += 1
+                        failed_urls.append(url_done)
+                        recent_logs.append(f"✗ sem dados")
 
-        # Salvar batch imediatamente (progresso parcial)
-        to_save = [r for r in results if r is not None]
-        if to_save:
-            upsert_imoveis(fonte_id, to_save)
+        # Salvar batch no DB
+        if batch_results:
+            upsert_imoveis(fonte_id, batch_results)
             progress(
-                f"  ✓ Batch {batch_num}: {len(to_save)} salvos "
+                f"  ✓ Batch {batch_num}: {len(batch_results)} salvos "
                 f"(total: {stats.enriched}/{total} | falhas: {stats.failed})"
             )
 
         # Progresso geral
-        done = min(i + CONCURRENCY, total)
-        pct = (done / total) * 100
-        progress(f"  📊 Progresso: {done}/{total} ({pct:.0f}%) — {stats.elapsed_str}")
+        pct = (processed_count / total) * 100
+        tmpl_info = ""
+        if template.is_ready:
+            tmpl_info = f" | ⚡template: {template.hits} hits, {template.misses} miss, {template.llm_calls} LLM"
+        elif template.learning:
+            tmpl_info = f" | 📚 aprendendo ({template._sample_count}/{SiteTemplate.LEARN_PAGES})"
+        progress(f"  📊 Progresso: {processed_count}/{total} ({pct:.0f}%) — {stats.elapsed_str}{tmpl_info}")
 
         _push_progress(
             "enriquecimento",
-            f"Extraindo dados dos imóveis... ({done}/{total})",
-            done, total, recent_logs,
+            f"Extraindo dados dos imóveis... ({processed_count}/{total})",
+            processed_count, total, recent_logs,
         )
+      except Exception as batch_err:
+        log.error(f"  ✗ BATCH {batch_num} CRASH: {batch_err}\n{traceback.format_exc()}")
+        # Continue to next batch instead of dying
+        continue
+      finally:
+        # Free memory between batches (prevents OOM on large sites)
+        batch_results = None  # release refs before gc
+        gc.collect()
+        # Log memory stats
+        progress(f"  💾 Memória: {_mem_info()}")
 
     # ── FASE 3: Marcar indisponíveis ──────────────────
     progress(f"\n{'─'*50}")
@@ -926,6 +1821,17 @@ def execute_crawl(
     progress(f"  ✅ Completos (preço+tipo+local): {n_complete}")
     progress(f"  ⚠️  Incompletos:                 {n_incomplete}")
     progress(f"  ❌ Erros/sem dados:              {n_failed}")
+    progress(f"{'─'*50}")
+    # Template stats
+    tpl_total = template.hits + template.misses
+    if tpl_total > 0 or template.llm_calls > 0:
+        progress(f"  🎯 Template: {'ATIVO' if template.is_ready else 'não confirmado'}")
+        progress(f"     CSS hits:   {template.hits}")
+        progress(f"     CSS misses: {template.misses}")
+        progress(f"     LLM calls:  {template.llm_calls}")
+        if tpl_total > 0:
+            progress(f"     Hit rate:   {template.hits/tpl_total:.0%}")
+        progress(f"     Selectors:  {len(template.confirmed)} campos")
     progress(f"{'─'*50}")
 
     if incomplete_items:

@@ -12,10 +12,17 @@ Logs detalhados para monitoramento no Railway.
 """
 
 import os
+import sys
+import faulthandler
 import threading
 import time
 from datetime import datetime
 from typing import Optional
+
+# Enable faulthandler to print tracebacks on segfaults/crashes
+_fh_file = open("faulthandler.log", "w")
+faulthandler.enable(file=_fh_file, all_threads=True)
+faulthandler.enable(file=sys.stderr, all_threads=True)
 
 from dotenv import load_dotenv
 
@@ -47,6 +54,7 @@ WORKER_SECRET = os.environ.get("WORKER_SECRET", "")
 
 # ─── Estado de crawls ativos ─────────────────────────────────────────────────
 
+MAX_CONCURRENT_CRAWLS = 1  # Limite global (Playwright usa muita RAM)
 active_crawls: dict[str, dict] = {}
 crawl_history: list[dict] = []  # últimos 20 crawls
 
@@ -105,7 +113,7 @@ async def crawl(body: CrawlRequest, request: Request):
     if not fonte_id:
         raise HTTPException(status_code=400, detail="fonteId required")
 
-    # Verifica se já está rodando
+    # Verifica se já está rodando (mesma fonte)
     if fonte_id in active_crawls:
         return JSONResponse(
             status_code=409,
@@ -113,6 +121,17 @@ async def crawl(body: CrawlRequest, request: Request):
                 "error": "Crawl já em andamento para esta fonte",
                 "fonteId": fonte_id,
                 "startedAt": active_crawls[fonte_id]["started_at"],
+            },
+        )
+
+    # Limite global de crawls simultâneos (Playwright/Scrapling usa muita RAM)
+    if len(active_crawls) >= MAX_CONCURRENT_CRAWLS:
+        running = [(fid[:8], info.get("fonte_nome", "?")) for fid, info in active_crawls.items()]
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": f"Limite de {MAX_CONCURRENT_CRAWLS} crawl(s) simultâneo(s) — aguarde",
+                "active": [{"id": fid, "nome": nome} for fid, nome in running],
             },
         )
 

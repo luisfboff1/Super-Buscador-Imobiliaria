@@ -18,8 +18,11 @@ export async function GET(req: NextRequest) {
     precoMax: searchParams.get("precoMax") ? Number(searchParams.get("precoMax")) : undefined,
     areaMin: searchParams.get("areaMin") ? Number(searchParams.get("areaMin")) : undefined,
     quartosMin: searchParams.get("quartosMin") ? Number(searchParams.get("quartosMin")) : undefined,
+    vagasMin: searchParams.get("vagasMin") ? Number(searchParams.get("vagasMin")) : undefined,
+    page: searchParams.get("page") ? Number(searchParams.get("page")) : 1,
+    pageSize: 10,
   };
 
-  const imoveis = await searchImoveis(filtros);
-  return NextResponse.json({ imoveis, total: imoveis.length });
+  const result = await searchImoveis(filtros);
+  return NextResponse.json(result);
 }

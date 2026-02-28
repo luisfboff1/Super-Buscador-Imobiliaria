@@ -66,8 +66,11 @@ type Filtros = {
   tipo: string;
   transacao: string;
   cidade: string;
+  bairro: string;
+  precoMin: string;
   precoMax: string;
   quartos: string;
+  vagas: string;
   areaMin: string;
 };
 
@@ -187,13 +190,19 @@ export default function BuscadorPage() {
     tipo: "",
     transacao: "",
     cidade: "",
+    bairro: "",
+    precoMin: "",
     precoMax: "",
     quartos: "",
+    vagas: "",
     areaMin: "",
   });
   const [busca, setBusca] = useState("");
   const [buscando, setBuscando] = useState(false);
   const [resultado, setResultado] = useState<Imovel[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
   const [favoritos, setFavoritos] = useState<Set<string>>(new Set());
   const [showFiltros, setShowFiltros] = useState(false);
 
@@ -211,28 +220,42 @@ export default function BuscadorPage() {
     });
   }
 
-  async function handleBuscar(e: React.FormEvent) {
-    e.preventDefault();
+  async function fetchPage(targetPage: number) {
     setBuscando(true);
     try {
       const params = new URLSearchParams();
       if (filtros.tipo) params.set("tipo", filtros.tipo);
       if (filtros.transacao) params.set("transacao", filtros.transacao);
       if (filtros.cidade) params.set("cidade", filtros.cidade);
+      if (filtros.bairro) params.set("bairro", filtros.bairro);
+      if (filtros.precoMin) params.set("precoMin", filtros.precoMin);
       if (filtros.precoMax) params.set("precoMax", filtros.precoMax);
       if (filtros.quartos) params.set("quartosMin", filtros.quartos);
+      if (filtros.vagas) params.set("vagasMin", filtros.vagas);
       if (filtros.areaMin) params.set("areaMin", filtros.areaMin);
       if (busca) params.set("q", busca);
+      params.set("page", String(targetPage));
 
       const res = await fetch(`/api/imoveis?${params.toString()}`);
       if (!res.ok) throw new Error("Erro ao buscar imóveis");
       const data = await res.json();
       setResultado(data.imoveis ?? []);
+      setTotal(data.total ?? 0);
+      setPage(data.page ?? 1);
+      setTotalPages(data.totalPages ?? 1);
     } catch {
       setResultado([]);
+      setTotal(0);
+      setTotalPages(1);
     } finally {
       setBuscando(false);
     }
+  }
+
+  async function handleBuscar(e: React.FormEvent) {
+    e.preventDefault();
+    setPage(1);
+    await fetchPage(1);
   }
 
   return (
@@ -343,6 +366,29 @@ export default function BuscadorPage() {
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "12px", marginTop: "12px" }}>
                   <div>
                     <label className="form-label" style={{ marginBottom: "4px" }}>
+                      Bairro
+                    </label>
+                    <input
+                      className="form-input"
+                      placeholder="Ex: Centro, São Pelegrino"
+                      value={filtros.bairro}
+                      onChange={(e) => setFiltros({ ...filtros, bairro: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="form-label" style={{ marginBottom: "4px" }}>
+                      Preço mín.
+                    </label>
+                    <input
+                      className="form-input"
+                      type="number"
+                      placeholder="Ex: 100000"
+                      value={filtros.precoMin}
+                      onChange={(e) => setFiltros({ ...filtros, precoMin: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="form-label" style={{ marginBottom: "4px" }}>
                       Preço máx.
                     </label>
                     <input
@@ -353,6 +399,8 @@ export default function BuscadorPage() {
                       onChange={(e) => setFiltros({ ...filtros, precoMax: e.target.value })}
                     />
                   </div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "12px", marginTop: "12px" }}>
                   <div>
                     <label className="form-label" style={{ marginBottom: "4px" }}>
                       Quartos mín.
@@ -367,6 +415,21 @@ export default function BuscadorPage() {
                       <option value="2">2+</option>
                       <option value="3">3+</option>
                       <option value="4">4+</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="form-label" style={{ marginBottom: "4px" }}>
+                      Garagens mín.
+                    </label>
+                    <select
+                      className="form-input"
+                      value={filtros.vagas}
+                      onChange={(e) => setFiltros({ ...filtros, vagas: e.target.value })}
+                    >
+                      <option value="">Qualquer</option>
+                      <option value="1">1+</option>
+                      <option value="2">2+</option>
+                      <option value="3">3+</option>
                     </select>
                   </div>
                   <div>
@@ -418,7 +481,10 @@ export default function BuscadorPage() {
               }}
             >
               <div style={{ fontSize: "13.5px", color: "var(--text-2)" }}>
-                <strong style={{ color: "var(--text)" }}>{resultado.length}</strong> imóveis encontrados
+                <strong style={{ color: "var(--text)" }}>{total}</strong> imóveis encontrados
+                {totalPages > 1 && (
+                  <span style={{ marginLeft: "8px" }}>— página {page} de {totalPages}</span>
+                )}
               </div>
               <select
                 className="form-input"
@@ -442,6 +508,57 @@ export default function BuscadorPage() {
                 />
               ))}
             </div>
+
+            {/* Paginação */}
+            {totalPages > 1 && (
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "center",
+                  alignItems: "center",
+                  gap: "8px",
+                  marginTop: "24px",
+                }}
+              >
+                <button
+                  className="btn btn-outline btn-sm"
+                  disabled={page <= 1 || buscando}
+                  onClick={() => fetchPage(page - 1)}
+                >
+                  ← Anterior
+                </button>
+                {Array.from({ length: totalPages }, (_, i) => i + 1)
+                  .filter((p) => p === 1 || p === totalPages || Math.abs(p - page) <= 2)
+                  .reduce<(number | "...")[]>((acc, p, idx, arr) => {
+                    if (idx > 0 && typeof arr[idx - 1] === "number" && p - (arr[idx - 1] as number) > 1)
+                      acc.push("...");
+                    acc.push(p);
+                    return acc;
+                  }, [])
+                  .map((p, idx) =>
+                    p === "..." ? (
+                      <span key={`ellipsis-${idx}`} style={{ padding: "0 4px", color: "var(--text-3)" }}>…</span>
+                    ) : (
+                      <button
+                        key={p}
+                        className={`btn btn-sm ${p === page ? "btn-primary" : "btn-outline"}`}
+                        disabled={buscando}
+                        onClick={() => fetchPage(p as number)}
+                        style={{ minWidth: "36px" }}
+                      >
+                        {p}
+                      </button>
+                    )
+                  )}
+                <button
+                  className="btn btn-outline btn-sm"
+                  disabled={page >= totalPages || buscando}
+                  onClick={() => fetchPage(page + 1)}
+                >
+                  Próxima →
+                </button>
+              </div>
+            )}
           </>
         )}
       </div>

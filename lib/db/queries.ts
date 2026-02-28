@@ -117,10 +117,16 @@ export type FiltrosImoveis = {
   precoMax?: number;
   areaMin?: number;
   quartosMin?: number;
-  vagas?: number;
+  vagasMin?: number;
+  page?: number;
+  pageSize?: number;
 };
 
 export async function searchImoveis(filtros: FiltrosImoveis = {}) {
+  const PAGE_SIZE = filtros.pageSize ?? 10;
+  const page = Math.max(1, filtros.page ?? 1);
+  const offset = (page - 1) * PAGE_SIZE;
+
   const conditions = [eq(tenantSchema.imoveis.disponivel, true)];
 
   if (filtros.q) {
@@ -149,6 +155,15 @@ export async function searchImoveis(filtros: FiltrosImoveis = {}) {
     conditions.push(gte(tenantSchema.imoveis.areaM2, String(filtros.areaMin)));
   if (filtros.quartosMin)
     conditions.push(gte(tenantSchema.imoveis.quartos, filtros.quartosMin));
+  if (filtros.vagasMin)
+    conditions.push(gte(tenantSchema.imoveis.vagas, filtros.vagasMin));
+
+  const whereClause = and(...conditions);
+
+  const [{ total }] = await db
+    .select({ total: count() })
+    .from(tenantSchema.imoveis)
+    .where(whereClause);
 
   const imoveis = await db
     .select({
@@ -176,11 +191,12 @@ export async function searchImoveis(filtros: FiltrosImoveis = {}) {
       tenantSchema.fontes,
       eq(tenantSchema.imoveis.fonteId, tenantSchema.fontes.id)
     )
-    .where(and(...conditions))
+    .where(whereClause)
     .orderBy(desc(tenantSchema.imoveis.createdAt))
-    .limit(100);
+    .limit(PAGE_SIZE)
+    .offset(offset);
 
-  return imoveis;
+  return { imoveis, total, page, pageSize: PAGE_SIZE, totalPages: Math.ceil(total / PAGE_SIZE) };
 }
 
 // ─── SEARCHES (HISTÓRICO) ─────────────────────────────────────────────────────
