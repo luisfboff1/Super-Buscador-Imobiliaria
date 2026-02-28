@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
     quartosMin: searchParams.get("quartosMin") ? Number(searchParams.get("quartosMin")) : undefined,
     vagasMin: searchParams.get("vagasMin") ? Number(searchParams.get("vagasMin")) : undefined,
     page: searchParams.get("page") ? Number(searchParams.get("page")) : 1,
-    pageSize: 10,
+    pageSize: 12,
   };
 
   const result = await searchImoveis(filtros);
