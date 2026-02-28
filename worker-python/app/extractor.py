@@ -160,10 +160,16 @@ def _llm_locate_from_titulo(titulo: str, url: str) -> Optional[ImovelInput]:
 
 _LOCATION_NOISE_RE = re.compile(
     r"R\$[\s\d.,]"               # preço (R$ 1.234)
-    r"|\bà venda\b|\bpara alugar\b|\bpara locação\b|\bimóv[eé]\b"  # frases de transação
-    r"|\bImobili[áa]ria\b",       # nome de empresa
+    r"|\bà venda\b|\bpara alugar\b|\bpara locação\b|\bpara comprar\b|\bimóv[eé]\b"  # frases de transação
+    r"|\bImobili[áa]ria\b"        # nome de empresa
+    r"|\bCOD\.?\s*\d+"           # código de referência (COD. 3698)
+    r"|\bno bairro\b",            # título SEO (fallback: extração abaixo)
     re.I,
 )
+
+
+# Padrão de título SEO BR: "...no bairro CENTRO em Caxias do Sul..."
+_BAIRRO_SEO_RE = re.compile(r'\bno\s+bairro\s+([^,\-\(]+?)\s+em\s', re.I)
 
 
 def _sanitize_location(val) -> Optional[str]:
@@ -172,12 +178,20 @@ def _sanitize_location(val) -> Optional[str]:
     Rejeita: sep ' | ', newlines, valores > 80 chars, preços ou frases
     de transação — padrões que indicam que a extração pegou o título da
     página em vez de um bairro/cidade verdadeiro.
+
+    Extrai automaticamente bairro de padrões SEO como:
+      "Loja Térrea para comprar no bairro CENTRO em Caxias do Sul - COD. 3698"
+      → "CENTRO"
     """
     if not val:
         return None
     v = str(val).strip()
     if " | " in v or "\n" in v or "\r" in v:
         return None
+    # Tentar extrair bairro de padrão SEO antes de qualquer rejeição
+    m_bairro = _BAIRRO_SEO_RE.search(v)
+    if m_bairro:
+        v = m_bairro.group(1).strip()
     if len(v) > 80:
         return None
     if _LOCATION_NOISE_RE.search(v):
@@ -691,7 +705,14 @@ def _parse_template_field(field: str, raw_text: str):
         m = re.search(r"(\d+)", text)
         if not m:
             return None
-        return int(m.group(1))
+        val = int(m.group(1))
+        # Sanity cap: quartos/banheiros ≤ 15; vagas ≤ 10
+        # Valores maiores indicam contaminação por area_m2 ou código ID
+        if field in ("quartos", "banheiros") and val > 15:
+            return None
+        if field == "vagas" and val > 10:
+            return None
+        return val
     if field == "tipo":
         t = _detect_tipo(text, text.lower())
         return t if t in VALID_TIPOS else None
@@ -825,6 +846,28 @@ class SiteTemplate:
                         log.debug(f"  ⚠ Template: seletor de '{field}' sem validação LLM — ignorado: {best_sel!r}")
                         continue
                 self.confirmed[field] = best_sel
+
+        # Unicidade: dois campos não podem ter o mesmo seletor confirmado.
+        # Ex: pioner não tem Banheiros → quartos e banheiros votam no mesmo CSS → remover ambíguo.
+        sel_to_field: dict[str, str] = {}
+        for f in list(self.confirmed.keys()):
+            sel = self.confirmed.get(f)
+            if sel is None:
+                continue
+            if sel in sel_to_field:
+                other = sel_to_field[sel]
+                votes_f = self._votes[f].get(sel, 0)
+                votes_other = self._votes[other].get(sel, 0)
+                loser = f if votes_f <= votes_other else other
+                log.warning(
+                    f"⚠ Template: seletor duplicado para '{f}' e '{other}': {sel!r} "
+                    f"— removendo '{loser}' (votos: {f}={votes_f}, {other}={votes_other})"
+                )
+                del self.confirmed[loser]
+                if loser != f:
+                    sel_to_field[sel] = f
+            else:
+                sel_to_field[sel] = f
 
         has_core = bool({"titulo", "preco"} & set(self.confirmed))
         if has_core and len(self.confirmed) >= self.MIN_FIELDS:
