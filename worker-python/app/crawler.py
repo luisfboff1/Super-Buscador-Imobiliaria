@@ -103,6 +103,9 @@ def is_detail_page_url(url: str, base_hostname: str) -> bool:
     # /imovel/slug-longo (singular, com slug)
     if re.search(r"/imovel/[a-z0-9][\w-]{5,}", path, re.I):
         return True
+    # /imovel?code=123 ou /imovel?id=123 ou /imovel?ref=123 (query-string style — ex: Nichele)
+    if re.search(r"/imovel\?(code|id|ref|cod)=\w+", parsed.geturl(), re.I):
+        return True
 
     # ── SKIP: patterns que NÃO são detalhe ──
     if any(p.search(url) for p in SKIP_URL_PATTERNS):
@@ -269,10 +272,13 @@ def fetch_page_with_js_pagination(
                 document.querySelectorAll('a[href]').forEach(a => {
                     try {
                         const href = a.href;
-                        if (href && href.includes('/imovel/')) {
+                        const isProperty = href.includes('/imovel/') || /\\/imovel\\?.*\\b(code|id|ref|cod)=/i.test(href);
+                        if (href && isProperty) {
                             const url = new URL(href);
                             if (url.hostname.includes(hostname)) {
-                                links.add(url.origin + url.pathname.replace(/\\/$/, ''));
+                                // Para URLs query-string style, preservar o search também
+                                const canonical = url.origin + url.pathname.replace(/\\/$/, '') + (url.search || '');
+                                links.add(canonical);
                             }
                         }
                     } catch(e) {}
