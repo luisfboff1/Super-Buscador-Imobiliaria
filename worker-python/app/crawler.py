@@ -286,8 +286,9 @@ def fetch_page_with_js_pagination(
             # Filtra com a mesma lógica inteligente usada pelo resto do crawler
             return [l for l in raw if is_detail_page_url(l, base_hostname)]
 
-        # Página 1
-        _time.sleep(2)
+        # Página 1 — network_idle=True já garante que o AJAX carregou;
+        # pequeno sleep extra por segurança em sites lentos
+        _time.sleep(1)
         p1_links = _get_detail_links()
         for l in p1_links:
             collected_links.add(l)
@@ -327,7 +328,7 @@ def fetch_page_with_js_pagination(
             if click_result in ('not_found', 'disabled'):
                 break
 
-            _time.sleep(2)  # Esperar AJAX carregar
+            _time.sleep(3)  # Esperar AJAX da página seguinte carregar
 
             pg_links = _get_detail_links()
             new_links = [l for l in pg_links if l not in collected_links]
@@ -355,9 +356,9 @@ def fetch_page_with_js_pagination(
         StealthyFetcher.fetch(
             url,
             headless=True,
-            network_idle=False,
+            network_idle=True,   # aguarda AJAX da listagem antes de chamar page_action
             timeout=180000,
-            wait=5000,
+            wait=8000,            # safety net extra para sites lentos
             disable_resources=False,
             page_action=_paginate_action,
         )
