@@ -728,7 +728,7 @@ Regras OBRIGATÓRIAS:
 - "banheiros": procure por "banheiros", "banheiro", "WC", "lavabo" — conte o total.
 - "vagas": procure por "vagas", "garagem", "estacionamento", "box" — conte o total de vagas de garagem.
 - "area_m2": procure por "m²", "m2", "metros quadrados", "área útil", "área total", "área privativa".
-- "bairro": nome do bairro, loteamento ou condomínio (ex: "Centro", "Petrópolis", "Jardim X"). Procure no endereço ou no título do anúncio. DEVE ser um nome geográfico real com no máximo 60 caracteres. NUNCA retorne o título da página, preço, nome de imobiliária ou frases como "casa à venda".
+- "bairro": nome do bairro, loteamento ou condomínio (ex: "Centro", "Petrópolis", "Jardim X"). Procure em: (1) endereço explícito na página, (2) TÍTULO DA PÁGINA — títulos BR frequentemente seguem o padrão ", Bairro em Cidade |" ou "em Bairro, Cidade -", por exemplo: "Casa à venda, R$ 500.000, Nossa Senhora da Saúde em Caxias do Sul | Imobiliária" → bairro="Nossa Senhora da Saúde". DEVE ser um nome geográfico real com no máximo 60 caracteres. NUNCA retorne o título completo da página, preço, nome de imobiliária ou frases como "casa à venda".
 - "cidade": nome da cidade ou município (ex: "Porto Alegre", "Caxias do Sul", "Florianópolis"). Somente o nome da cidade, sem caracteres " | ", preços ou descrições longas.
 - "preco": valor numérico em reais. Se houver preço de venda E aluguel, retorne o de venda.
 - Estado deve ser a sigla com 2 letras (RS, SP, SC, MG, etc).
@@ -763,6 +763,12 @@ def html_to_clean_text(html: str) -> str:
     """Converte HTML para texto limpo para o LLM."""
     soup = BeautifulSoup(html, "lxml")
 
+    # Captura o <title> ANTES de remover qualquer tag — é muito útil para bairro/cidade
+    page_title = ""
+    title_tag = soup.find("title")
+    if title_tag:
+        page_title = title_tag.get_text(strip=True)
+
     # Remove ruído
     for tag in soup.find_all([
         "script", "style", "iframe", "noscript", "svg", "nav", "header", "footer",
@@ -781,6 +787,10 @@ def html_to_clean_text(html: str) -> str:
     # Limitar tokens (~6000 chars ≈ 1500 tokens)
     if len(text) > 6000:
         text = text[:6000]
+
+    # Garante que o título da página aparece primeiro (fundamental para extração de bairro/cidade)
+    if page_title and page_title not in text[:200]:
+        text = f"TÍTULO DA PÁGINA: {page_title}\n\n" + text
 
     return text.strip()
 

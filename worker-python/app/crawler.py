@@ -266,17 +266,15 @@ def fetch_page_with_js_pagination(
         import time as _time
 
         def _get_detail_links():
-            """Extrai links de detalhe da página atual via JS."""
-            return page.evaluate("""(hostname) => {
+            """Extrai todos os hrefs do mesmo domínio — filtragem feita em Python."""
+            raw = page.evaluate("""(hostname) => {
                 const links = new Set();
                 document.querySelectorAll('a[href]').forEach(a => {
                     try {
                         const href = a.href;
-                        const isProperty = href.includes('/imovel/') || /\\/imovel\\?.*\\b(code|id|ref|cod)=/i.test(href);
-                        if (href && isProperty) {
+                        if (href && href.startsWith('http')) {
                             const url = new URL(href);
-                            if (url.hostname.includes(hostname)) {
-                                // Para URLs query-string style, preservar o search também
+                            if (url.hostname === hostname || url.hostname.endsWith('.' + hostname)) {
                                 const canonical = url.origin + url.pathname.replace(/\\/$/, '') + (url.search || '');
                                 links.add(canonical);
                             }
@@ -285,6 +283,8 @@ def fetch_page_with_js_pagination(
                 });
                 return Array.from(links);
             }""", base_hostname)
+            # Filtra com a mesma lógica inteligente usada pelo resto do crawler
+            return [l for l in raw if is_detail_page_url(l, base_hostname)]
 
         # Página 1
         _time.sleep(2)
