@@ -182,6 +182,9 @@ def _sanitize_location(val) -> Optional[str]:
         return None
     if _LOCATION_NOISE_RE.search(v):
         return None
+    # Rejeitar valores de UI/navegação (breadcrumbs, labels, etc.)
+    if v.lower() in _UI_BLACKLIST:
+        return None
     return v or None
 
 
@@ -573,6 +576,25 @@ def _find_selectors_for_value(soup, value, field: str) -> list[str]:
     return results[:5]
 
 
+# Valores de UI que o template NÃO deve aprender como bairro/cidade/etc.
+# Elementos de navegação (breadcrumb, menu, labels) comuns em sites imobiliários.
+_UI_BLACKLIST: frozenset = frozenset({
+    "início", "inicio", "home", "página inicial", "pagina inicial",
+    "bairro", "cidade", "estado", "localização", "localizacao", "endereço", "endereco",
+    "tipo", "transação", "transacao", "categoria", "subtipo",
+    "preço", "preco", "valor", "aluguel", "venda", "compra",
+    "quartos", "quarto", "dormitórios", "dormitorios",
+    "banheiros", "banheiro", "vagas", "vaga", "garagem",
+    "área", "area", "m²", "m2",
+    "descrição", "descricao", "detalhes", "características", "caracteristicas",
+    "imóvel", "imovel", "imóveis", "imoveis", "anúncio", "anuncio",
+    "ver mais", "saiba mais", "clique aqui", "ver anúncio",
+    "contato", "fale conosco", "whatsapp",
+    "anterior", "próximo", "proximo", "voltar",
+    "filtros", "filtrar", "buscar", "pesquisar",
+})
+
+
 def _parse_template_field(field: str, raw_text: str):
     """Parse valor de texto bruto para o tipo correto do campo."""
     if not raw_text:
@@ -594,7 +616,13 @@ def _parse_template_field(field: str, raw_text: str):
     if field == "descricao":
         return text[:500] if len(text) >= 10 else None
     # Strings: titulo, bairro, cidade, estado
-    return text if len(text) >= 2 else None
+    # Rejeitar valores de UI (labels, navegação, breadcrumbs)
+    if text.lower() in _UI_BLACKLIST:
+        return None
+    # Rejeitar strings muito curtas ou que são só dígitos soltos
+    if len(text) < 2 or text.isdigit():
+        return None
+    return text
 
 
 class SiteTemplate:
