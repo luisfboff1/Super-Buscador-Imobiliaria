@@ -1383,16 +1383,17 @@ def extract_property_data(
                             f"vs regex=R${regex_extra.preco:,.0f} ({diff_pct:.0%})"
                         )
                 tpl_result = _merge_results(tpl_result, regex_extra)
-            # ── Fallback grátis: extrair localização da URL (slug → nome)
+            # ── URL slug SEMPRE tem prioridade (mais confiável que CSS)
             # Ex: /imovel/casa/caxias-do-sul/charqueadas/18432 → bairro=Charqueadas, cidade=Caxias do Sul
-            if tpl_result.bairro is None or tpl_result.cidade is None:
-                url_bairro, url_cidade = _extract_location_from_url(url)
-                if tpl_result.bairro is None and url_bairro:
-                    tpl_result.bairro = url_bairro
-                    log.debug(f"  📍 bairro da URL: {url_bairro}")
-                if tpl_result.cidade is None and url_cidade:
-                    tpl_result.cidade = url_cidade
-                    log.debug(f"  📍 cidade da URL: {url_cidade}")
+            url_bairro, url_cidade = _extract_location_from_url(url)
+            if url_bairro:
+                if tpl_result.bairro != url_bairro:
+                    log.debug(f"  📍 bairro URL override: '{tpl_result.bairro}' → '{url_bairro}'")
+                tpl_result.bairro = url_bairro
+            if url_cidade:
+                if tpl_result.cidade != url_cidade:
+                    log.debug(f"  📍 cidade URL override: '{tpl_result.cidade}' → '{url_cidade}'")
+                tpl_result.cidade = url_cidade
 
             # Se bairro/cidade ainda nulos, micro-LLM via título
             if (tpl_result.bairro is None or tpl_result.cidade is None) and tpl_result.titulo:
