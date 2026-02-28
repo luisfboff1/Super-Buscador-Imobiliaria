@@ -932,6 +932,162 @@ def _missing_fields(result: Optional[ImovelInput]) -> list[str]:
     return [f for f in _ALL_DATA_FIELDS if getattr(result, f) is None]
 
 
+# ─── Campos esperados por tipo de imóvel (para self-healing do template) ─────
+# Quando o template extrai um imóvel desse tipo mas campo está nulo → LLM corrige
+_FIELDS_EXPECTED_BY_TIPO: dict[str, set] = {
+    "apartamento": {"preco", "bairro", "cidade", "quartos", "banheiros", "area_m2"},
+    "casa":        {"preco", "bairro", "cidade", "quartos", "banheiros", "area_m2"},
+    "sobrado":     {"preco", "bairro", "cidade", "quartos", "banheiros"},
+    "studio":      {"preco", "bairro", "cidade", "quartos", "banheiros"},
+    "flat":        {"preco", "bairro", "cidade", "quartos", "banheiros"},
+    "cobertura":   {"preco", "bairro", "cidade", "quartos", "banheiros"},
+    "kitnet":      {"preco", "bairro", "cidade", "banheiros"},
+    "terreno":     {"preco", "bairro", "cidade", "area_m2"},
+    "lote":        {"preco", "bairro", "cidade", "area_m2"},
+    "sala comercial": {"preco", "bairro", "cidade", "area_m2"},
+    "sala":        {"preco", "bairro", "cidade", "area_m2"},
+    "galpão":      {"preco", "bairro", "cidade", "area_m2"},
+    "prédio":      {"preco", "bairro", "cidade", "area_m2"},
+}
+
+
+def _llm_heal_missing_fields(
+    html: str,
+    url: str,
+    result: ImovelInput,
+) -> Optional[ImovelInput]:
+    """
+    LLM focada: dado um imóvel parcialmente extraído, preenche APENAS
+    os campos esperados para aquele tipo mas ainda nulos.
+
+    Se preencher, o chamador deve atualizar o template com os novos selectors
+    para que as próximas páginas não precisem de LLM (self-healing).
+    """
+    tipo = result.tipo
+    if not tipo:
+        return None
+
+    expected = _FIELDS_EXPECTED_BY_TIPO.get(tipo.lower(), set())
+    if not expected:
+        return None
+
+    # Identifica campos que deveriam estar presentes mas estão nulos
+    truly_missing = [
+        f for f in expected
+        if getattr(result, f, None) is None
+    ]
+    if not truly_missing:
+        return None  # já completo para o tipo, sem necessidade de LLM
+
+    # Contexto já extraído (ajuda o LLM a não duplicar esforço)
+    found_ctx = {
+        "titulo":   result.titulo,
+        "tipo":     tipo,
+        "transacao": result.transacao,
+        "preco":    result.preco,
+        "bairro":   result.bairro,
+        "cidade":   result.cidade,
+    }
+    found_str = ", ".join(
+        f'{k}="{v}"' for k, v in found_ctx.items() if v is not None
+    )
+
+    field_desc = {
+        "preco":    "preço numérico em reais (ex: 850000)",
+        "bairro":   "nome do bairro",
+        "cidade":   "nome da cidade",
+        "quartos":  "número de quartos/dormitórios (inteiro)",
+        "banheiros": "número de banheiros (inteiro)",
+        "vagas":    "número de vagas de garagem (inteiro)",
+        "area_m2":  "área em m² (número)",
+    }
+    missing_desc = "; ".join(
+        f'"{f}" ({field_desc.get(f, f)})' for f in truly_missing
+    )
+
+    clean_text = html_to_clean_text(html)
+    if len(clean_text) < 100:
+        return None
+
+    schema_fields: dict = {}
+    for f in truly_missing:
+        if f in ("quartos", "banheiros", "vagas"):
+            schema_fields[f] = "integer or null"
+        elif f in ("preco", "area_m2"):
+            schema_fields[f] = "number or null"
+        else:
+            schema_fields[f] = "string or null"
+
+    try:
+        text = _llm_chat(
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Você é um extrator de dados de imóveis. "
+                        "Analise a página e retorne APENAS um objeto JSON com os campos solicitados. "
+                        "Se um campo não estiver visível na página, use null. "
+                        "Nenhum texto fora do JSON."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Imóvel tipo {tipo.upper()}.\n"
+                        f"Já encontramos: {found_str}\n"
+                        f"Extraia APENAS estes campos que estão faltando: {missing_desc}\n\n"
+                        f"Schema esperado: {json.dumps(schema_fields)}\n\n"
+                        f"Texto da página:\n{clean_text[:3000]}"
+                    ),
+                },
+            ],
+        )
+
+        if not text:
+            return None
+
+        json_match = re.search(r"\{[\s\S]*\}", text)
+        if not json_match:
+            return None
+
+        data = json.loads(json_match.group())
+        healed = ImovelInput(url_anuncio=url)
+
+        for f in truly_missing:
+            val = data.get(f)
+            if val is None:
+                continue
+            try:
+                if f in ("quartos", "banheiros", "vagas"):
+                    v = int(val)
+                    if v > 0:
+                        setattr(healed, f, v)
+                elif f == "preco":
+                    v = float(val)
+                    if v > 1000:
+                        setattr(healed, f, v)
+                elif f == "area_m2":
+                    v = float(val)
+                    if v > 0:
+                        setattr(healed, f, v)
+                else:
+                    s = str(val).strip()
+                    if s:
+                        setattr(healed, f, _sanitize_location(s) if f in ("bairro", "cidade") else s)
+            except (ValueError, TypeError):
+                continue
+
+        filled = [f for f in truly_missing if getattr(healed, f, None) is not None]
+        if filled:
+            log.info(f"  🔧 [heal] {tipo} | preencheu: {', '.join(filled)} — {url[-50:]}")
+            return healed
+
+    except Exception as e:
+        log.debug(f"  [heal] LLM falhou: {e}")
+
+    return None
+
+
 # ─── Pipeline completa de extração ───────────────────────────────────────────
 
 def extract_property_data(
@@ -999,6 +1155,32 @@ def extract_property_data(
                 if loc:
                     tpl_result = _merge_results(tpl_result, loc)
             tpl_result.imagens = imagens if imagens else tpl_result.imagens
+
+            # ── Self-healing: se tipo + campos esperados nulos → LLM preenche + atualiza template
+            healed = _llm_heal_missing_fields(html, url, tpl_result)
+            if healed:
+                tpl_result = _merge_results(tpl_result, healed)
+                # Tenta achar selectors CSS para os novos valores e atualiza template
+                soup_heal = BeautifulSoup(html, "lxml")
+                healed_fields = [
+                    f for f in ("quartos", "banheiros", "vagas", "area_m2",
+                                "preco", "bairro", "cidade")
+                    if getattr(healed, f, None) is not None
+                    and f not in template.confirmed  # só adiciona se não tinha
+                ]
+                updated = []
+                for field in healed_fields:
+                    val = getattr(healed, field)
+                    sels = _find_selectors_for_value(soup_heal, val, field)
+                    if sels:
+                        template.confirmed[field] = sels[0]
+                        updated.append(field)
+                if updated:
+                    log.info(
+                        f"  ✅ Template auto-corrigido: +{', '.join(updated)} "
+                        f"({len(template.confirmed)} selectors total)"
+                    )
+
             preco_str = f"R${tpl_result.preco:,.0f}" if tpl_result.preco else "s/preço"
             log.info(
                 f"⚡ [template] {tpl_result.titulo or url[-30:]} — "
