@@ -66,11 +66,13 @@ def _llm_chat(
     openai_client = _get_openai()
     if openai_client is not None:
         try:
+            # gpt-5-nano é reasoning: não aceita temperature, e max_completion_tokens
+            # inclui tokens internos de raciocínio + output. Adicionamos 600 de overhead.
+            reasoning_budget = max(max_tokens + 600, 800)
             response = openai_client.chat.completions.create(
                 model="gpt-5-nano",
                 messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
+                max_completion_tokens=reasoning_budget,
             )
             text = response.choices[0].message.content or ""
             usage = response.usage
