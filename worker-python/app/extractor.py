@@ -231,11 +231,18 @@ def extract_quick_regex(html: str, url: str) -> Optional[ImovelInput]:
     titulo = None
     og_title = soup.find("meta", property="og:title")
     if og_title:
-        titulo = og_title.get("content", "").strip()
+        candidate = og_title.get("content", "").strip()
+        # Valida se parece um título de imóvel (tem tipo, preço, bairro ou área)
+        _IMOVEL_WORDS = r"(apartamento|casa|sobrado|terreno|sala|loja|galpão|galp.o|cobertura|flat|kitnet|chácara|sítio|r\$|m²|quarto|dormit)"
+        if candidate and re.search(_IMOVEL_WORDS, candidate, re.I):
+            titulo = candidate
     if not titulo:
         h1 = soup.find("h1")
         if h1:
-            titulo = h1.get_text(strip=True)
+            t = h1.get_text(strip=True)
+            # h1 curto e genérico (ex: "Simule aqui:") não serve
+            if len(t) > 20:
+                titulo = t
 
     # Preço: regex R$ no texto (universal em sites BR)
     preco = _extract_preco(text_lower)
