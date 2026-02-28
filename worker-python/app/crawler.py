@@ -328,7 +328,7 @@ def fetch_page_with_js_pagination(
             if click_result in ('not_found', 'disabled'):
                 break
 
-            _time.sleep(3)  # Esperar AJAX da página seguinte carregar
+            _time.sleep(2)  # Esperar AJAX da página seguinte carregar
 
             pg_links = _get_detail_links()
             new_links = [l for l in pg_links if l not in collected_links]
@@ -356,9 +356,9 @@ def fetch_page_with_js_pagination(
         StealthyFetcher.fetch(
             url,
             headless=True,
-            network_idle=True,   # aguarda AJAX da listagem antes de chamar page_action
+            network_idle=False,   # evita hang em sites com analytics contínuos
             timeout=180000,
-            wait=8000,            # safety net extra para sites lentos
+            wait=6000,            # espera fixa suficiente para AJAX da listagem
             disable_resources=False,
             page_action=_paginate_action,
         )
