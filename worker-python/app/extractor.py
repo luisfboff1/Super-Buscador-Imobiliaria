@@ -121,6 +121,44 @@ def extract_images(html: str) -> list[str]:
     return list(urls)[:30]
 
 
+# ─── Micro-LLM: extrai bairro/cidade APENAS do título (pós-processamento do template) ────────
+
+def _llm_locate_from_titulo(titulo: str, url: str) -> Optional[ImovelInput]:
+    """
+    Micro-chamada LLM: extrai bairro e cidade a partir SOMENTE do título.
+    Usada no fast path do template quando bairro/cidade ficam nulos.
+    Funciona para qualquer site cujo título contenha localização (padrão BR comum).
+    """
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Você extrai bairro e cidade de títulos de imóveis brasileiros. "
+                "Retorne SOMENTE JSON: {\"bairro\": \"...\", \"cidade\": \"...\"}. "
+                "Use null para campos ausentes. Sem explicações. "
+                "Padrão comum: \"Tipo à venda, R$ X, Bairro em Cidade | Imob\". "
+                "Bairro deve ser nome geográfico real (máx 60 chars)."
+            ),
+        },
+        {"role": "user", "content": f"Título: {titulo[:300]}"},
+    ]
+    raw = _llm_chat(messages, max_tokens=60, temperature=0)
+    if not raw:
+        return None
+    try:
+        m = re.search(r"\{[^}]+\}", raw, re.S)
+        if not m:
+            return None
+        data = json.loads(m.group())
+        bairro = _sanitize_location(data.get("bairro")) if data.get("bairro") and data["bairro"] != "null" else None
+        cidade = _sanitize_location(data.get("cidade")) if data.get("cidade") and data["cidade"] != "null" else None
+        if not bairro and not cidade:
+            return None
+        return ImovelInput(url_anuncio=url, bairro=bairro, cidade=cidade)
+    except Exception:
+        return None
+
+
 # ─── Sanitização de localização (cidade/bairro) ──────────────────────────────
 
 _LOCATION_NOISE_RE = re.compile(
@@ -949,6 +987,12 @@ def extract_property_data(
                             f"vs regex=R${regex_extra.preco:,.0f} ({diff_pct:.0%})"
                         )
                 tpl_result = _merge_results(tpl_result, regex_extra)
+            # Se bairro/cidade ainda nulos após CSS+regex, micro-LLM via título
+            # (genérico: funciona para qualquer site com localização no título)
+            if (tpl_result.bairro is None or tpl_result.cidade is None) and tpl_result.titulo:
+                loc = _llm_locate_from_titulo(tpl_result.titulo, url)
+                if loc:
+                    tpl_result = _merge_results(tpl_result, loc)
             tpl_result.imagens = imagens if imagens else tpl_result.imagens
             preco_str = f"R${tpl_result.preco:,.0f}" if tpl_result.preco else "s/preço"
             log.info(

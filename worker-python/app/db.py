@@ -266,6 +266,31 @@ def upsert_imoveis(fonte_id: str, items: list[ImovelInput]) -> int:
     return saved
 
 
+def reset_stuck_crawling_fontes() -> int:
+    """
+    Reseta fontes presas em status='crawling' (worker foi reiniciado).
+    Chamado no startup para evitar o frontend ficar preso em polling infinito.
+    """
+    stuck_progress = json.dumps({
+        "fase": "erro",
+        "message": "Worker reiniciado — crawl interrompido. Clique em Sincronizar para reiniciar.",
+        "done": 0, "total": 0, "pct": 0,
+        "enriched": 0, "failed": 0,
+        "elapsed": "0s", "logs": [],
+        "finished": True,
+    }, ensure_ascii=False)
+    with cursor() as cur:
+        cur.execute(
+            "UPDATE fontes SET status = 'erro', crawl_erro = %s, crawl_progress = %s::jsonb "
+            "WHERE status = 'crawling'",
+            ("Worker reiniciado — crawl interrompido", stuck_progress),
+        )
+        count = cur.rowcount
+    if count > 0:
+        log.warning(f"⚠ {count} fonte(s) resetada(s): estavam em 'crawling' ao reiniciar")
+    return count
+
+
 def update_crawl_progress(fonte_id: str, progress_data: dict) -> None:
     """Atualiza o progresso do crawl no banco para polling do frontend."""
     with cursor() as cur:

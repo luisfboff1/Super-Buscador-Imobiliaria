@@ -35,22 +35,59 @@ export function FonteActions({ fonteId, status }: FonteActionsProps) {
   const [progress, setProgress] = useState<CrawlProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollStartRef = useRef<number | null>(null);
+  const lastProgressRef = useRef<{ done: number; ts: number } | null>(null);
+
+  // Máximo: 25 min polling; sem progresso por 8 min = travado
+  const POLL_MAX_MS = 25 * 60 * 1000;
+  const STALL_MS = 8 * 60 * 1000;
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
       clearInterval(pollRef.current);
       pollRef.current = null;
     }
+    pollStartRef.current = null;
+    lastProgressRef.current = null;
   }, []);
 
   const pollStatus = useCallback(async () => {
+    // Timeout global: para se passou do limite máximo
+    const now = Date.now();
+    if (pollStartRef.current && now - pollStartRef.current > POLL_MAX_MS) {
+      setError("Crawl sem resposta — o worker pode ter sido reiniciado. Tente sincronizar novamente.");
+      stopPolling();
+      setSyncing(false);
+      return;
+    }
+
     try {
       const res = await fetch(`/api/fontes/${fonteId}/status`);
       if (!res.ok) return;
       const data = await res.json();
 
+      // Se o worker reiniciou e resetou o status, parar polling
+      if (data.status === "erro" && data.progress?.finished) {
+        setError(data.erro || "Crawl interrompido");
+        stopPolling();
+        setSyncing(false);
+        return;
+      }
+
       if (data.progress) {
         setProgress(data.progress as CrawlProgress);
+
+        // Detecta travamento: progresso parado por STALL_MS
+        const done = (data.progress as CrawlProgress).done ?? 0;
+        const last = lastProgressRef.current;
+        if (!last || done !== last.done) {
+          lastProgressRef.current = { done, ts: now };
+        } else if (now - last.ts > STALL_MS && !data.progress.finished) {
+          setError("Crawl parece travado (sem progresso há 8 min). Verifique o worker ou tente novamente.");
+          stopPolling();
+          setSyncing(false);
+          return;
+        }
 
         if (data.progress.finished || data.status === "ok") {
           stopPolling();
@@ -79,6 +116,8 @@ export function FonteActions({ fonteId, status }: FonteActionsProps) {
     if (status === "crawling" && !pollRef.current) {
       setSyncing(true);
       setError(null);
+      pollStartRef.current = Date.now();
+      lastProgressRef.current = null;
       pollRef.current = setInterval(pollStatus, 2500);
       // Primeira poll imediata
       setTimeout(pollStatus, 300);
@@ -108,6 +147,8 @@ export function FonteActions({ fonteId, status }: FonteActionsProps) {
       }
 
       // Começar polling a cada 2.5s
+      pollStartRef.current = Date.now();
+      lastProgressRef.current = null;
       pollRef.current = setInterval(pollStatus, 2500);
       // Primeira poll rapidinha
       setTimeout(pollStatus, 1000);

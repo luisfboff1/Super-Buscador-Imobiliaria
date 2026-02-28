@@ -33,7 +33,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.logger import setup_logging, get_logger
-from app.db import get_fonte_by_id, update_fonte_status, update_crawl_progress, test_connection
+from app.db import get_fonte_by_id, update_fonte_status, update_crawl_progress, test_connection, reset_stuck_crawling_fontes
 from app.crawler import execute_crawl, CrawlStats
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
@@ -279,6 +279,8 @@ async def startup():
     def _test_db():
         try:
             test_connection()
+            # Reseta fontes presas em 'crawling' (este worker foi reiniciado)
+            reset_stuck_crawling_fontes()
         except Exception as e:
             log.warning(f"DB conexão adiada: {e}")
 
