@@ -610,6 +610,9 @@ def _llm_find_selectors(soup: BeautifulSoup, data: 'ImovelInput') -> dict[str, s
                 "do imóvel (não breadcrumbs, não menus, não rodapé, não labels de "
                 "formulário). Para preço, o selector deve apontar para o elemento "
                 "que contém o valor numérico formatado. "
+                "CRÍTICO: 'vagas' é o número de vagas de garagem (tipicamente 0-5), "
+                "NUNCA confunda com area_m2 (que contém 'm²' ou 'm2'). "
+                "Se vagas e area_m2 estão no mesmo elemento, omita vagas. "
                 "Retorne APENAS JSON válido: {\"campo\": \"css_selector\", ...} "
                 "Omita campos que não conseguir identificar com certeza."
             ),
@@ -686,7 +689,9 @@ def _parse_template_field(field: str, raw_text: str):
         return _extract_area(text.lower())
     if field in ("quartos", "banheiros", "vagas"):
         m = re.search(r"(\d+)", text)
-        return int(m.group(1)) if m else None
+        if not m:
+            return None
+        return int(m.group(1))
     if field == "tipo":
         t = _detect_tipo(text, text.lower())
         return t if t in VALID_TIPOS else None
@@ -735,6 +740,8 @@ class SiteTemplate:
         self.confirmed: dict[str, str] = {}  # field -> css_selector
         self.is_ready = False
         self._sample_count = 0
+        # Rastrear quais seletores foram identificados pela LLM (semanticamente confiáveis)
+        self._llm_voted: dict[str, set] = {}  # field -> {selector, ...}
         # Métricas
         self.hits = 0
         self.misses = 0
@@ -760,11 +767,15 @@ class SiteTemplate:
         #    (ignora breadcrumbs, menus, labels — entende o contexto).
         llm_selectors = _llm_find_selectors(soup, data)
 
-        # Votar nos selectors LLM com peso maior
+        # Votar nos selectors LLM com peso maior e rastrear origem LLM
         for field, sel in llm_selectors.items():
             if field not in self._votes:
                 self._votes[field] = {}
             self._votes[field][sel] = self._votes[field].get(sel, 0) + self._LLM_SELECTOR_WEIGHT
+            # Marcar como validado semanticamente pela LLM
+            if field not in self._llm_voted:
+                self._llm_voted[field] = set()
+            self._llm_voted[field].add(sel)
 
         # 2. Fallback texto para campos que a LLM não cobriu
         fields_missed_by_llm = [f for f in self.ALL_FIELDS if f not in llm_selectors]
@@ -793,6 +804,10 @@ class SiteTemplate:
     # banheiros, sala não tem quartos), então MIN_VOTES=1 é suficiente para eles.
     OPTIONAL_FIELDS = {"banheiros", "vagas", "area_m2", "quartos", "descricao", "estado"}
 
+    # Campos numéricos onde a LLM deve ter validado o seletor para confiar nele.
+    # Sem validação LLM, text-match pode confundir vagas com area_m2 (ex: 55.89m² → vagas=55).
+    _REQUIRE_LLM_ORIGIN = {"vagas", "quartos", "banheiros", "area_m2"}
+
     def _confirm(self):
         """Confirma selectors com votos suficientes."""
         for field, candidates in self._votes.items():
@@ -802,6 +817,13 @@ class SiteTemplate:
             best_votes = candidates[best_sel]
             min_votes_needed = 1 if field in self.OPTIONAL_FIELDS else self.MIN_VOTES
             if best_votes >= min_votes_needed:
+                # Para campos numéricos ambíguos, só confirmar se a LLM validou
+                # semanticamente o seletor (evita confusão vagas ↔ area_m2)
+                if field in self._REQUIRE_LLM_ORIGIN:
+                    llm_voted_for_field = self._llm_voted.get(field, set())
+                    if best_sel not in llm_voted_for_field:
+                        log.debug(f"  ⚠ Template: seletor de '{field}' sem validação LLM — ignorado: {best_sel!r}")
+                        continue
                 self.confirmed[field] = best_sel
 
         has_core = bool({"titulo", "preco"} & set(self.confirmed))
