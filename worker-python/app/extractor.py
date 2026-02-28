@@ -955,17 +955,17 @@ Regras OBRIGATÓRIAS:
 - Se um campo não estiver na página, retorne null.
 - EXTRAIA TUDO QUE CONSEGUIR: analise cuidadosamente todo o texto procurando cada campo.
 - "transacao" é OBRIGATÓRIO: analise se o imóvel está à venda ("venda"), para alugar ("aluguel"), ou ambos ("ambos"). Use pistas da URL, título, e texto. Se o site é de venda e não menciona aluguel, retorne "venda".
-- "tipo" é OBRIGATÓRIO: identifique o tipo do imóvel (casa, apartamento, terreno, sobrado, kitnet, etc). Deduza do título, descrição ou contexto.
-- "quartos": procure por "quartos", "dormitórios", "dorm", "suítes" — conte o total de dormitórios.
-- "banheiros": procure por "banheiros", "banheiro", "WC", "lavabo" — conte o total.
-- "vagas": procure por "vagas", "garagem", "estacionamento", "box" — conte o total de vagas de garagem.
-- "area_m2": procure por "m²", "m2", "metros quadrados", "área útil", "área total", "área privativa".
-- "bairro": nome do bairro, loteamento ou condomínio (ex: "Centro", "Petrópolis", "Jardim X"). Procure em: (1) endereço explícito na página, (2) TÍTULO DA PÁGINA — títulos BR frequentemente seguem o padrão ", Bairro em Cidade |" ou "em Bairro, Cidade -", por exemplo: "Casa à venda, R$ 500.000, Nossa Senhora da Saúde em Caxias do Sul | Imobiliária" → bairro="Nossa Senhora da Saúde". DEVE ser um nome geográfico real com no máximo 60 caracteres. NUNCA retorne o título completo da página, preço, nome de imobiliária ou frases como "casa à venda".
-- "cidade": nome da cidade ou município (ex: "Porto Alegre", "Caxias do Sul", "Florianópolis"). Somente o nome da cidade, sem caracteres " | ", preços ou descrições longas.
+- "tipo" é OBRIGATÓRIO: identifique o tipo do imóvel (casa, apartamento, terreno, sobrado, kitnet, etc). Deduza do título, descrição ou contexto. URLs como /imovel/casa/ ou /imovel/apartamento/ indicam o tipo.
+- "quartos": procure por "quartos", "dormitórios", "dorms", "suítes", "dorm.". Variações: "3 Dorm.", "4 Dormitórios sendo 1 Suíte" = 4 quartos. SEMPRE use o número TOTAL de dormitórios.
+- "banheiros": procure por "banheiros", "banheiro social", "bwc", "wc", "lavabo". "2 Banheiros Sociais" = 2 banheiros.
+- "vagas": procure por "vagas", "garagem", "estacionamento", "box", "Garagem p/ N Carros". "Garagem p/ 2 Carros" = 2 vagas. "Garagem c/ Churrasqueira" sem número = 1 vaga.
+- "area_m2": procure por "m²", "m2", "metros quadrados", "área útil", "área total", "área privativa". NUNCA confunda área com número de quartos/vagas.
+- "bairro": nome do bairro, loteamento ou condomínio. Procure em: (1) endereço explícito na página, (2) URL — URLs BR frequentemente têm bairro no path: "/imovel/casa/caxias-do-sul/charqueadas/123" → bairro="Charqueadas", (3) TÍTULO — padrão "Tipo à venda, Bairro em Cidade". MÁXIMO 60 chars. NUNCA retorne título completo, preço ou nome de imobiliária.
+- "cidade": nome da cidade. Procure na URL ("/caxias-do-sul/" → "Caxias do Sul"), no título ou no corpo. Converta slug: "caxias-do-sul" → "Caxias do Sul", "porto-alegre" → "Porto Alegre".
 - "preco": valor numérico em reais. Se houver preço de venda E aluguel, retorne o de venda.
 - Estado deve ser a sigla com 2 letras (RS, SP, SC, MG, etc).
 - Descrição: máximo 500 caracteres, resumindo o texto principal do anúncio.
-- Se houver uma lista de características (ex: "3 quartos, 2 banheiros, 1 vaga"), extraia cada valor."""
+- LEIA COM ATENÇÃO a descrição do imóvel — ela frequentemente lista os cômodos com "; " como separador. Ex: "4 Dormitórios sendo 1 Suíte; 2 Banheiros Sociais; Garagem p/ 2 Carros" → quartos=4, banheiros=2, vagas=2."""
 
 SCHEMA_GUIDE = """{
   "titulo": "string|null",
@@ -1139,6 +1139,38 @@ _FIELDS_EXPECTED_BY_TIPO: dict[str, set] = {
 }
 
 
+def _extract_location_from_url(url: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    Extrai (bairro, cidade) de URLs no padrão BR:
+      /imovel/{tipo}/{cidade-slug}/{bairro-slug}/{id}
+    Ex: /imovel/casa/caxias-do-sul/charqueadas/18432 → ("Charqueadas", "Caxias do Sul")
+    """
+    def slug_to_name(slug: str) -> str:
+        return slug.replace("-", " ").title()
+
+    try:
+        from urllib.parse import urlparse
+        path = urlparse(url).path.strip("/")
+        parts = path.split("/")
+        # Pattern: imovel / tipo / cidade / bairro / id
+        if len(parts) >= 5 and parts[0] == "imovel":
+            cidade_slug = parts[2]
+            bairro_slug = parts[3]
+            # Skip if last segment is pure digits (it's the ID, not bairro)
+            if not bairro_slug.isdigit():
+                return slug_to_name(bairro_slug), slug_to_name(cidade_slug)
+        # Pattern: cidade / bairro / tipo / id (other sites)
+        if len(parts) >= 3:
+            for i, part in enumerate(parts[:-1]):
+                if re.match(r'^\d+$', parts[i + 1]) and not part.isdigit():
+                    bairro = slug_to_name(part)
+                    cidade = slug_to_name(parts[i - 1]) if i > 0 else None
+                    return bairro, cidade
+    except Exception:
+        pass
+    return None, None
+
+
 def _llm_heal_missing_fields(
     html: str,
     url: str,
@@ -1152,10 +1184,16 @@ def _llm_heal_missing_fields(
     para que as próximas páginas não precisem de LLM (self-healing).
     """
     tipo = result.tipo
+    # Se tipo ainda não foi extraído, tenta inferir da URL (ex: /imovel/casa/ → casa)
     if not tipo:
-        return None
+        tipo = _detect_tipo("", url.replace("-", " ").replace("/", " "))
 
-    expected = _FIELDS_EXPECTED_BY_TIPO.get(tipo.lower(), set())
+    if tipo:
+        expected = _FIELDS_EXPECTED_BY_TIPO.get(tipo.lower(), set())
+    else:
+        # Sem tipo, ainda tenta preencher campos numéricos e localização
+        expected = {"quartos", "banheiros", "vagas", "area_m2", "preco", "bairro", "cidade"}
+
     if not expected:
         return None
 
@@ -1182,19 +1220,23 @@ def _llm_heal_missing_fields(
 
     field_desc = {
         "preco":    "preço numérico em reais (ex: 850000)",
-        "bairro":   "nome do bairro",
+        "bairro":   "nome do bairro ou loteamento (máx 60 chars)",
         "cidade":   "nome da cidade",
-        "quartos":  "número de quartos/dormitórios (inteiro)",
-        "banheiros": "número de banheiros (inteiro)",
-        "vagas":    "número de vagas de garagem (inteiro)",
-        "area_m2":  "área em m² (número)",
+        "quartos":  "total de quartos/dormitórios (inteiro) — inclui suítes",
+        "banheiros": "total de banheiros/WC/lavabos (inteiro)",
+        "vagas":    "total de vagas de garagem (inteiro) — 'Garagem p/ 2 Carros' = 2",
+        "area_m2":  "área em m² (número float)",
     }
     missing_desc = "; ".join(
         f'"{f}" ({field_desc.get(f, f)})' for f in truly_missing
     )
 
     clean_text = html_to_clean_text(html)
-    if len(clean_text) < 100:
+    # Também inclui a descricao já extraída se existir — ela tem os dados!
+    descricao_hint = ""
+    if result.descricao and len(result.descricao) > 10:
+        descricao_hint = f"\nDESCRIÇÃO JÁ EXTRAÍDA (leia com atenção): {result.descricao}"
+    if len(clean_text) < 50 and not descricao_hint:
         return None
 
     schema_fields: dict = {}
@@ -1206,25 +1248,30 @@ def _llm_heal_missing_fields(
         else:
             schema_fields[f] = "string or null"
 
+    tipo_str = tipo.upper() if tipo else "DESCONHECIDO"
     try:
         text = _llm_chat(
             messages=[
                 {
                     "role": "system",
                     "content": (
-                        "Você é um extrator de dados de imóveis. "
-                        "Analise a página e retorne APENAS um objeto JSON com os campos solicitados. "
-                        "Se um campo não estiver visível na página, use null. "
-                        "Nenhum texto fora do JSON."
+                        "Você é um extrator especialista em imóveis brasileiros. "
+                        "Analise o texto e extraia os campos solicitados. "
+                        "LEIA TODA A DESCRIÇÃO — ela usa '; ' como separador: "
+                        "'4 Dormitórios sendo 1 Suíte; 2 Banheiros Sociais; Garagem p/ 2 Carros' → quartos=4, banheiros=2, vagas=2. "
+                        "'Garagem p/ N Carros' significa N vagas. "
+                        "Para bairro: verifique URL (/imovel/tipo/cidade/bairro/id) e converta slug. "
+                        "Retorne APENAS JSON válido. Nenhum texto fora do JSON."
                     ),
                 },
                 {
                     "role": "user",
                     "content": (
-                        f"Imóvel tipo {tipo.upper()}.\n"
-                        f"Já encontramos: {found_str}\n"
-                        f"Extraia APENAS estes campos que estão faltando: {missing_desc}\n\n"
-                        f"Schema esperado: {json.dumps(schema_fields)}\n\n"
+                        f"URL: {url}\n"
+                        f"Tipo de imóvel: {tipo_str}\n"
+                        f"Já encontramos: {found_str}{descricao_hint}\n\n"
+                        f"Extraia APENAS estes campos que estão faltando: {missing_desc}\n"
+                        f"Schema: {json.dumps(schema_fields)}\n\n"
                         f"Texto da página:\n{clean_text[:3000]}"
                     ),
                 },
@@ -1336,15 +1383,54 @@ def extract_property_data(
                             f"vs regex=R${regex_extra.preco:,.0f} ({diff_pct:.0%})"
                         )
                 tpl_result = _merge_results(tpl_result, regex_extra)
-            # Se bairro/cidade ainda nulos após CSS+regex, micro-LLM via título
-            # (genérico: funciona para qualquer site com localização no título)
+            # ── Fallback grátis: extrair localização da URL (slug → nome)
+            # Ex: /imovel/casa/caxias-do-sul/charqueadas/18432 → bairro=Charqueadas, cidade=Caxias do Sul
+            if tpl_result.bairro is None or tpl_result.cidade is None:
+                url_bairro, url_cidade = _extract_location_from_url(url)
+                if tpl_result.bairro is None and url_bairro:
+                    tpl_result.bairro = url_bairro
+                    log.debug(f"  📍 bairro da URL: {url_bairro}")
+                if tpl_result.cidade is None and url_cidade:
+                    tpl_result.cidade = url_cidade
+                    log.debug(f"  📍 cidade da URL: {url_cidade}")
+
+            # Se bairro/cidade ainda nulos, micro-LLM via título
             if (tpl_result.bairro is None or tpl_result.cidade is None) and tpl_result.titulo:
                 loc = _llm_locate_from_titulo(tpl_result.titulo, url)
                 if loc:
                     tpl_result = _merge_results(tpl_result, loc)
+
+            # ── Regex grátis na descricao para quartos/banheiros/vagas não achados pelo CSS
+            # Pega variações como "4 Dormitórios sendo 1 Suíte", "Garagem p/ 2 Carros"
+            if any(getattr(tpl_result, f) is None for f in ("quartos", "banheiros", "vagas")):
+                desc_text = (tpl_result.descricao or "").lower()
+                if desc_text:
+                    if tpl_result.quartos is None:
+                        tpl_result.quartos = _extract_quartos(desc_text)
+                    if tpl_result.banheiros is None:
+                        # Regex extra para "N Banheiros Sociais"
+                        m_banh = re.search(r'(\d+)\s*(?:banheiros?\s*sociais?|banheiros?|bwc|wc)', desc_text)
+                        tpl_result.banheiros = int(m_banh.group(1)) if m_banh and 1 <= int(m_banh.group(1)) <= 15 else None
+                    if tpl_result.vagas is None:
+                        # Regex extra para "Garagem p/ N Carros"
+                        m_vagas = re.search(r'(?:garagem\s+p/\s*(\d+)\s*carros?|garagem.*?(\d+)\s*carros?|(\d+)\s*vagas?)', desc_text)
+                        if m_vagas:
+                            v = int(next(g for g in m_vagas.groups() if g is not None))
+                            tpl_result.vagas = v if 1 <= v <= 10 else None
+                        elif re.search(r'garagem|garagem\s+c/', desc_text):
+                            # Garagem mencionada sem número → 1 vaga
+                            tpl_result.vagas = tpl_result.vagas or 1
+
+            # ── Inferir tipo da URL se template não o extraiu
+            if tpl_result.tipo is None:
+                url_tipo = _detect_tipo("", url.replace("-", " ").replace("/", " "))
+                if url_tipo:
+                    tpl_result.tipo = url_tipo
+                    log.debug(f"  🔍 tipo da URL: {url_tipo}")
+
             tpl_result.imagens = imagens if imagens else tpl_result.imagens
 
-            # ── Self-healing: se tipo + campos esperados nulos → LLM preenche + atualiza template
+            # ── Self-healing: campos ainda nulos → LLM preenche + atualiza template
             healed = _llm_heal_missing_fields(html, url, tpl_result)
             if healed:
                 tpl_result = _merge_results(tpl_result, healed)
