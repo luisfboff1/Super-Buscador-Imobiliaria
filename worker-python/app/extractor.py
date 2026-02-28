@@ -121,6 +121,35 @@ def extract_images(html: str) -> list[str]:
     return list(urls)[:30]
 
 
+# ─── Sanitização de localização (cidade/bairro) ──────────────────────────────
+
+_LOCATION_NOISE_RE = re.compile(
+    r"R\$[\s\d.,]"               # preço (R$ 1.234)
+    r"|\bà venda\b|\bpara alugar\b|\bpara locação\b|\bimóv[eé]\b"  # frases de transação
+    r"|\bImobili[áa]ria\b",       # nome de empresa
+    re.I,
+)
+
+
+def _sanitize_location(val) -> Optional[str]:
+    """Retorna None se val não parece nome geográfico real.
+
+    Rejeita: sep ' | ', newlines, valores > 80 chars, preços ou frases
+    de transação — padrões que indicam que a extração pegou o título da
+    página em vez de um bairro/cidade verdadeiro.
+    """
+    if not val:
+        return None
+    v = str(val).strip()
+    if " | " in v or "\n" in v or "\r" in v:
+        return None
+    if len(v) > 80:
+        return None
+    if _LOCATION_NOISE_RE.search(v):
+        return None
+    return v or None
+
+
 # ─── 2. Extração via JSON-LD (grátis, sem LLM) ──────────────────────────────
 
 def extract_from_json_ld(html: str, url: str) -> Optional[ImovelInput]:
@@ -167,8 +196,8 @@ def extract_from_json_ld(html: str, url: str) -> Optional[ImovelInput]:
                     url_anuncio=url,
                     titulo=item.get("name") or item.get("headline"),
                     descricao=(item.get("description") or "")[:500] or None,
-                    cidade=address.get("addressLocality"),
-                    bairro=address.get("streetAddress") or address.get("addressRegion", "").split(",")[0].strip() or None,
+                    cidade=_sanitize_location(address.get("addressLocality")),
+                    bairro=_sanitize_location(address.get("streetAddress") or address.get("addressRegion", "").split(",")[0].strip() or None),
                     estado=(address.get("addressRegion", "") or "")[-2:].upper() if address.get("addressRegion") else None,
                     preco=preco,
                     area_m2=_parse_floor_size(item.get("floorSize")),
@@ -662,8 +691,8 @@ class SiteTemplate:
             titulo=data.get("titulo"),
             tipo=data.get("tipo") if data.get("tipo") in VALID_TIPOS else None,
             transacao=data.get("transacao"),
-            cidade=data.get("cidade") or fallback_cidade,
-            bairro=data.get("bairro"),
+            cidade=_sanitize_location(data.get("cidade")) or fallback_cidade,
+            bairro=_sanitize_location(data.get("bairro")),
             estado=data.get("estado") or fallback_estado,
             preco=data.get("preco"),
             area_m2=data.get("area_m2"),
@@ -699,7 +728,8 @@ Regras OBRIGATÓRIAS:
 - "banheiros": procure por "banheiros", "banheiro", "WC", "lavabo" — conte o total.
 - "vagas": procure por "vagas", "garagem", "estacionamento", "box" — conte o total de vagas de garagem.
 - "area_m2": procure por "m²", "m2", "metros quadrados", "área útil", "área total", "área privativa".
-- "bairro": nome do bairro, loteamento ou condomínio. Procure no endereço ou título.
+- "bairro": nome do bairro, loteamento ou condomínio (ex: "Centro", "Petrópolis", "Jardim X"). Procure no endereço ou no título do anúncio. DEVE ser um nome geográfico real com no máximo 60 caracteres. NUNCA retorne o título da página, preço, nome de imobiliária ou frases como "casa à venda".
+- "cidade": nome da cidade ou município (ex: "Porto Alegre", "Caxias do Sul", "Florianópolis"). Somente o nome da cidade, sem caracteres " | ", preços ou descrições longas.
 - "preco": valor numérico em reais. Se houver preço de venda E aluguel, retorne o de venda.
 - Estado deve ser a sigla com 2 letras (RS, SP, SC, MG, etc).
 - Descrição: máximo 500 caracteres, resumindo o texto principal do anúncio.
@@ -796,8 +826,8 @@ def extract_via_llm(html: str, url: str) -> Optional[ImovelInput]:
             titulo=data.get("titulo"),
             tipo=data.get("tipo") if data.get("tipo") in VALID_TIPOS else None,
             transacao=data.get("transacao"),
-            cidade=data.get("cidade"),
-            bairro=data.get("bairro"),
+            cidade=_sanitize_location(data.get("cidade")),
+            bairro=_sanitize_location(data.get("bairro")),
             estado=data.get("estado"),
             preco=float(data["preco"]) if data.get("preco") and float(data["preco"]) > 1000 else None,
             area_m2=float(data["areaM2"]) if data.get("areaM2") and float(data["areaM2"]) > 0 else None,
@@ -838,7 +868,7 @@ def _merge_results(base: ImovelInput, extra: Optional[ImovelInput]) -> ImovelInp
 
 _ALL_DATA_FIELDS = (
     "preco", "tipo", "transacao", "quartos", "banheiros",
-    "vagas", "area_m2", "bairro", "descricao",
+    "vagas", "area_m2", "cidade", "bairro", "descricao",
 )
 
 
@@ -943,7 +973,7 @@ def extract_property_data(
     # ── 3. LLM — chamada se campos core faltam ──
     missing = _missing_fields(result)
     # Campos core: sem eles o dado é pouco útil
-    core_missing = [f for f in missing if f in ("preco", "tipo", "bairro", "transacao")]
+    core_missing = [f for f in missing if f in ("preco", "tipo", "cidade", "bairro", "transacao")]
     # Durante aprendizado do template: sempre chamar LLM para coleta de dados
     should_call_llm = bool(core_missing) or (template is not None and template.learning)
 
