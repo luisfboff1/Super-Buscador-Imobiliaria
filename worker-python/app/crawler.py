@@ -153,7 +153,7 @@ def fetch_page(url: str, stealth: bool = False) -> Optional[object]:
                 url,
                 headless=True,
                 network_idle=False,
-                timeout=60000,
+                timeout=30000,
                 wait=3000,
                 disable_resources=False,
             )
