@@ -576,6 +576,85 @@ def _find_selectors_for_value(soup, value, field: str) -> list[str]:
     return results[:5]
 
 
+def _llm_find_selectors(soup: BeautifulSoup, data: 'ImovelInput') -> dict[str, str]:
+    """
+    Usa LLM para identificar CSS selectors SEMANTICAMENTE corretos para cada campo.
+    Envia o HTML limpo + valores já extraídos → LLM aponta o elemento correto,
+    ignorando breadcrumbs, menus e labels de formulário.
+    Retorna {campo: css_selector} somente para os validados (selector existe no DOM).
+    """
+    # Campos que queremos selectors para o template
+    _TEMPLATE_FIELDS = [
+        "preco", "titulo", "bairro", "cidade", "estado",
+        "quartos", "banheiros", "vagas", "area_m2",
+    ]
+    fields_with_values = {
+        k: getattr(data, k)
+        for k in _TEMPLATE_FIELDS
+        if getattr(data, k, None) is not None
+    }
+    if not fields_with_values:
+        return {}
+
+    # HTML compacto: strip de atributos desnecessários e limitar tamanho
+    html_compact = str(soup)[:9000]
+
+    values_json = json.dumps(fields_with_values, ensure_ascii=False)
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Você analisa HTML de páginas de listagem de imóveis brasileiros. "
+                "Dado o HTML e os valores corretos já extraídos, identifique o CSS "
+                "selector MAIS ESPECÍFICO que contém cada valor na ÁREA DE DETALHES "
+                "do imóvel (não breadcrumbs, não menus, não rodapé, não labels de "
+                "formulário). Para preço, o selector deve apontar para o elemento "
+                "que contém o valor numérico formatado. "
+                "Retorne APENAS JSON válido: {\"campo\": \"css_selector\", ...} "
+                "Omita campos que não conseguir identificar com certeza."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"HTML da página:\n{html_compact}\n\n"
+                f"Valores corretos extraídos:\n{values_json}\n\n"
+                "Identifique o CSS selector para cada campo. Responda só com JSON."
+            ),
+        },
+    ]
+
+    raw = _llm_chat(messages)
+    if not raw:
+        return {}
+
+    try:
+        m = re.search(r"\{[\s\S]*\}", raw)
+        if not m:
+            return {}
+        result = json.loads(m.group())
+        valid: dict[str, str] = {}
+        for field, sel in result.items():
+            if field not in fields_with_values:
+                continue
+            if not isinstance(sel, str) or not sel.strip():
+                continue
+            sel = sel.strip()
+            # Validar: o selector realmente existe e retorna algo no DOM
+            try:
+                el = soup.select_one(sel)
+                if el is not None:
+                    valid[field] = sel
+            except Exception:
+                pass
+        if valid:
+            log.debug(f"  🤖 LLM selectors: {list(valid.keys())}")
+        return valid
+    except Exception as e:
+        log.debug(f"  [llm_find_selectors] parse error: {e}")
+        return {}
+
+
 # Valores de UI que o template NÃO deve aprender como bairro/cidade/etc.
 # Elementos de navegação (breadcrumb, menu, labels) comuns em sites imobiliários.
 _UI_BLACKLIST: frozenset = frozenset({
@@ -665,6 +744,9 @@ class SiteTemplate:
     def learning(self) -> bool:
         return not self.is_ready and self._sample_count < self.LEARN_PAGES
 
+    # Peso do voto para selectors identificados pela LLM vs texto (mais confiável).
+    _LLM_SELECTOR_WEIGHT = 3
+
     def add_sample(self, html: str, data: 'ImovelInput'):
         """Aprende selectors de uma página com dados extraídos."""
         if self.is_ready:
@@ -674,7 +756,19 @@ class SiteTemplate:
         for tag in soup.find_all(["script", "style", "svg", "noscript", "iframe"]):
             tag.decompose()
 
-        for field in self.ALL_FIELDS:
+        # 1. LLM identifica semanticamente quais elementos correspondem a cada campo
+        #    (ignora breadcrumbs, menus, labels — entende o contexto).
+        llm_selectors = _llm_find_selectors(soup, data)
+
+        # Votar nos selectors LLM com peso maior
+        for field, sel in llm_selectors.items():
+            if field not in self._votes:
+                self._votes[field] = {}
+            self._votes[field][sel] = self._votes[field].get(sel, 0) + self._LLM_SELECTOR_WEIGHT
+
+        # 2. Fallback texto para campos que a LLM não cobriu
+        fields_missed_by_llm = [f for f in self.ALL_FIELDS if f not in llm_selectors]
+        for field in fields_missed_by_llm:
             value = getattr(data, field, None)
             if value is None:
                 continue
@@ -689,7 +783,8 @@ class SiteTemplate:
                 self._votes[field][sel] = self._votes[field].get(sel, 0) + 1
 
         self._sample_count += 1
-        log.debug(f"📘 Template amostra {self._sample_count}/{self.LEARN_PAGES}")
+        coverage = f"{len(llm_selectors)}/{len([f for f in self.ALL_FIELDS if getattr(data, f, None) is not None])} LLM"
+        log.debug(f"📘 Template amostra {self._sample_count}/{self.LEARN_PAGES} ({coverage})")
 
         if self._sample_count >= self.LEARN_PAGES:
             self._confirm()
