@@ -935,6 +935,17 @@ class SiteTemplate:
         )
 
         result.imagens = extract_images(html)
+
+        # Fallback descrição: se CSS não achou selector, extrai do maior bloco de texto
+        if result.descricao is None:
+            # Remove ruído antes de procurar
+            clean_soup = BeautifulSoup(html, "lxml")
+            for tag in clean_soup.find_all(["script", "style", "nav", "header", "footer", "iframe", "noscript"]):
+                tag.decompose()
+            result.descricao = _extract_desc_from_soup(clean_soup)
+            if result.descricao:
+                log.debug(f"  📝 descricao via fallback ({len(result.descricao)} chars)")
+
         return result
 
     def __repr__(self):
@@ -989,6 +1000,50 @@ VALID_TIPOS = {
     "pavilhao",
     "outro",
 }
+
+
+def _extract_desc_from_soup(soup: BeautifulSoup) -> Optional[str]:
+    """
+    Fallback: extrai descrição da página quando o CSS template não encontrou.
+    Tenta headings conhecidos ('Sobre o Imóvel', 'Descrição'), depois maior parágrafo.
+    """
+    # 1. Procurar após headings semânticos de descrição
+    _DESC_HEADINGS = {
+        "sobre o imóvel", "sobre o imovel", "descrição", "descricao",
+        "detalhes", "características", "caracteristicas", "sobre o imóvel",
+    }
+    for heading in soup.find_all(["h1", "h2", "h3", "h4", "h5", "strong"]):
+        htxt = heading.get_text(strip=True).lower()
+        if any(kw in htxt for kw in _DESC_HEADINGS):
+            # Irmãos seguintes com texto
+            nxt = heading.find_next_sibling()
+            while nxt:
+                txt = nxt.get_text(" ", strip=True)
+                if len(txt) >= 80:
+                    return txt[:500]
+                nxt = nxt.find_next_sibling()
+            # Texto dentro do elemento pai
+            parent = heading.parent
+            if parent:
+                ptxt = parent.get_text(" ", strip=True)
+                ptxt = ptxt.replace(heading.get_text(strip=True), "", 1).strip()
+                if len(ptxt) >= 80:
+                    return ptxt[:500]
+
+    # 2. Maior parágrafo ou bloco de texto longo (evita menus/footer)
+    _NOISE_KW = {"©", "copyright", "powered by", "todos os direitos", "política de"}
+    best_txt = ""
+    best_len = 0
+    for el in soup.find_all(["p", "div", "section", "article"]):
+        # Evita containers grandes que incluem sub-elementos completos
+        if el.find(["p", "ul", "ol", "table"]):
+            continue
+        txt = el.get_text(" ", strip=True)
+        if 80 <= len(txt) <= 2000 and len(txt) > best_len:
+            if not any(kw in txt.lower() for kw in _NOISE_KW):
+                best_txt = txt
+                best_len = len(txt)
+    return best_txt[:500] if best_txt else None
 
 
 def html_to_clean_text(html: str) -> str:
