@@ -713,6 +713,14 @@ REGRAS:
 - Identifique TODAS as listagens: venda E aluguel, se existirem.
 - Use URLs que mostram o CATÁLOGO/LISTAGEM de imóveis (não um imóvel específico).
 - Prefira URLs genéricas (sem filtro de cidade/bairro específico).
+- EVITE páginas de 'destaques', 'destaque', 'highlights', 'featured' ou 'em-destaque'
+  (ex: /imoveis/locacoes/destaques). Elas mostram apenas seleções curadas, não o catálogo completo.
+- Se o site tiver SUBCATEGORIAS de listagem (ex: /imoveis/locacoes/residenciais,
+  /imoveis/locacoes/comerciais, /imoveis/locacoes/industriais, /imoveis/vendas/residenciais),
+  inclua CADA subcategoria como uma listagem separada no array 'listagens'.
+  É melhor retornar muitas listagens do que perder imóveis!
+- Para sites com botão 'Carregar mais' ou infinite scroll (sem página 2 na URL),
+  defina paginacao.tipo como 'nenhuma' (o crawler vai clicar o botão automaticamente).
 - Para paginação: analise os links e tente deduzir o padrão.
   Ex: se existe /imoveis/comprar, a pág 2 provavelmente é /imoveis/comprar?page=2
 - Se não houver listagens visíveis, retorne listagens como array vazio.
@@ -883,9 +891,11 @@ def discover_property_urls(
     # Deduplicate listing URLs (já são URLs finais, mas por segurança)
     listing_urls = list(dict.fromkeys(listing_urls))
 
-    # ── Dedup por tipo: manter apenas a URL mais abrangente por tipo ──
-    # (evita 10+ subcategorias do mesmo tipo, ex: venda/terreno, venda/casa, etc.)
-    if len(listing_urls) > 2:
+    # ── Dedup por tipo: manter até 3 URLs por tipo ──
+    # (evita 10+ subcategorias do mesmo tipo, ex: venda/terreno, venda/casa, etc.
+    #  mas mantém subcategorias legítimas como residenciais/comerciais/industriais)
+    MAX_PER_TIPO = 3
+    if len(listing_urls) > MAX_PER_TIPO * 2:
         from collections import defaultdict
         tipo_groups: dict[str, list[tuple[str, int]]] = defaultdict(list)
         for url in listing_urls:
@@ -902,11 +912,11 @@ def discover_property_urls(
         filtered: list[str] = []
         for tipo, group in tipo_groups.items():
             group.sort(key=lambda x: x[1], reverse=True)
-            best_url, best_count = group[0]
-            filtered.append(best_url)
-            if len(group) > 1:
-                progress(f"  Tipo '{tipo}': mantendo {best_url} ({best_count} links)")
-                progress(f"    Removidas {len(group)-1} subcategorias")
+            keep = group[:MAX_PER_TIPO]
+            for url, count in keep:
+                filtered.append(url)
+            if len(group) > MAX_PER_TIPO:
+                progress(f"  Tipo '{tipo}': mantendo top {MAX_PER_TIPO} de {len(group)} subcategorias")
 
         if len(filtered) < len(listing_urls):
             progress(f"  Dedup por tipo: {len(listing_urls)} → {len(filtered)} listagens")
