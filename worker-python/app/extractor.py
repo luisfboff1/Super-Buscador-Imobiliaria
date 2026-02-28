@@ -528,9 +528,13 @@ def _find_selectors_for_value(soup, value, field: str) -> list[str]:
         except Exception:
             search_patterns.append(re.escape(str_val))
     elif field == "area_m2":
+        # Requer contexto de unidade para evitar falso positivo com vagas/quartos
         try:
             v = float(str_val)
-            search_patterns.append(re.escape(str(int(v))))
+            num = re.escape(str(int(v)))
+            search_patterns.append(f"{num}\\s*m[²2]")
+            search_patterns.append(f"{num}\\s*m\\s*2")
+            # Fallback sem contexto apenas se nenhum match com unidade for encontrado
         except Exception:
             search_patterns.append(re.escape(str_val))
     elif field in ("quartos", "banheiros", "vagas"):
@@ -662,6 +666,10 @@ class SiteTemplate:
         if self._sample_count >= self.LEARN_PAGES:
             self._confirm()
 
+    # Campos opcionais: não aparecem em todos os tipos de imóvel (terreno não tem
+    # banheiros, sala não tem quartos), então MIN_VOTES=1 é suficiente para eles.
+    OPTIONAL_FIELDS = {"banheiros", "vagas", "area_m2", "quartos", "descricao", "estado"}
+
     def _confirm(self):
         """Confirma selectors com votos suficientes."""
         for field, candidates in self._votes.items():
@@ -669,7 +677,8 @@ class SiteTemplate:
                 continue
             best_sel = max(candidates, key=candidates.get)
             best_votes = candidates[best_sel]
-            if best_votes >= self.MIN_VOTES:
+            min_votes_needed = 1 if field in self.OPTIONAL_FIELDS else self.MIN_VOTES
+            if best_votes >= min_votes_needed:
                 self.confirmed[field] = best_sel
 
         has_core = bool({"titulo", "preco"} & set(self.confirmed))
