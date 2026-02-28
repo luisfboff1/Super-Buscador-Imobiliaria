@@ -276,10 +276,20 @@ def extract_quick_regex(html: str, url: str) -> Optional[ImovelInput]:
 
 def _detect_transacao(url: str, titulo: str, text: str) -> Optional[str]:
     """Detecta tipo de transação a partir da URL, título e texto."""
-    combined = f"{url.lower()} {titulo.lower()} {text[:500]}"
+    # Prioridade 1: URL + título (mais confiável — sem ruído de menus de navegação)
+    primary = f"{url.lower()} {titulo.lower()}"
+    has_venda_primary = bool(re.search(r"(comprar|venda|à venda|a venda|para vender)", primary))
+    has_aluguel_primary = bool(re.search(r"(alugar|aluguel|locação|para alugar|locacao)", primary))
 
-    has_venda = bool(re.search(r"(comprar|venda|à venda|a venda|para vender)", combined))
-    has_aluguel = bool(re.search(r"(alugar|aluguel|locação|para alugar|locacao)", combined))
+    if has_venda_primary and not has_aluguel_primary:
+        return "venda"
+    if has_aluguel_primary and not has_venda_primary:
+        return "aluguel"
+
+    # Prioridade 2: corpo do texto (excluindo início que costuma ter menu de nav)
+    body = text[200:700] if len(text) > 200 else text[:500]
+    has_venda = has_venda_primary or bool(re.search(r"(comprar|venda|à venda|a venda|para vender)", body))
+    has_aluguel = has_aluguel_primary or bool(re.search(r"(alugar|aluguel|locação|para alugar|locacao)", body))
 
     if has_venda and has_aluguel:
         return "ambos"
@@ -304,8 +314,8 @@ def _extract_preco(text: str) -> Optional[float]:
                 precos.append(val)
         except ValueError:
             continue
-    # Retorna o maior (geralmente é o de venda, não condomínio)
-    return max(precos) if precos else None
+    # Retorna o primeiro preço válido (o do imóvel principal, que aparece antes das sugestões de outros imóveis)
+    return precos[0] if precos else None
 
 
 def _extract_area(text: str) -> Optional[float]:
@@ -860,8 +870,8 @@ def extract_property_data(
     # Imagens via BS4 (sempre, independente do método)
     imagens = extract_images(html)
 
-    # 404 soft
-    if re.search(r"404|não encontrad|not found", html[:2000], re.I):
+    # 404 soft — usar word-boundary para evitar falso positivo em CDN paths (ex: /10404/property/)
+    if re.search(r"(?<!\d)404(?!\d)|não encontrad|not found", html[:2000], re.I):
         log.debug(f"✗ 404 soft — {url}")
         return None
 
