@@ -1493,8 +1493,23 @@ def _detect_page2_url(
             if links:
                 p2_new = [l for l in links if l not in _p1]
                 if p2_new:
-                    log.info(f"  ✓ Paginação path-append funcionou: {len(links)} imóveis (+{len(p2_new)} novos)")
-                    return probe_url
+                    # Validação com página 3: /imoveis/2/ pode ser categoria, não paginação
+                    # Se /3/ também tiver novos itens, aí é paginação real
+                    all_so_far = _p1 | set(links)
+                    probe3_url = f"{listing_url.rstrip('/')}/3/"
+                    p3 = fetch_page(probe3_url, stealth=use_stealth)
+                    if p3:
+                        p3_links = extract_detail_links(p3, base_hostname)
+                        p3_new = [l for l in p3_links if l not in all_so_far]
+                        if p3_new:
+                            log.info(f"  ✓ Paginação path-append funcionou: pág2={len(links)}, pág3={len(p3_links)}, novos_p3={len(p3_new)} — {probe_url}")
+                            return probe_url
+                        else:
+                            log.info(f"  ✗ Path-append: pág 2 OK ({len(p2_new)} novos) mas pág 3 repetida — provavelmente categoria, não paginação")
+                    else:
+                        # Página 3 sem resposta — aceitar com cautela
+                        log.info(f"  ✓ Paginação path-append: {len(links)} imóveis (+{len(p2_new)} novos, pág 3 sem resposta) — {probe_url}")
+                        return probe_url
                 else:
                     log.info(f"  ✗ Path-append retornou mesmos imóveis da pág 1 — ignorando")
 
