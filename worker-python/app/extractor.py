@@ -67,7 +67,7 @@ def _llm_chat(
     if openai_client is not None:
         try:
             response = openai_client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-5-nano",
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
