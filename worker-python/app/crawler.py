@@ -286,9 +286,13 @@ def fetch_page_with_js_pagination(
             # Filtra com a mesma lógica inteligente usada pelo resto do crawler
             return [l for l in raw if is_detail_page_url(l, base_hostname)]
 
-        # Página 1 — network_idle=True já garante que o AJAX carregou;
-        # pequeno sleep extra por segurança em sites lentos
-        _time.sleep(1)
+        # Página 1 — aguardar AJAX da listagem carregar completamente
+        # wait_for_load_state networkidle com timeout curto para não travar em analytics
+        try:
+            page.wait_for_load_state("networkidle", timeout=15000)
+        except Exception:
+            pass  # timeout OK — continuamos com o que carregou
+        _time.sleep(2)  # buffer extra para AJAX de cards de imóveis
         p1_links = _get_detail_links()
         for l in p1_links:
             collected_links.add(l)
@@ -328,7 +332,12 @@ def fetch_page_with_js_pagination(
             if click_result in ('not_found', 'disabled'):
                 break
 
-            _time.sleep(2)  # Esperar AJAX da página seguinte carregar
+            # Aguardar AJAX da página seguinte carregar
+            try:
+                page.wait_for_load_state("networkidle", timeout=8000)
+            except Exception:
+                pass
+            _time.sleep(2)  # buffer extra
 
             pg_links = _get_detail_links()
             new_links = [l for l in pg_links if l not in collected_links]
@@ -356,9 +365,9 @@ def fetch_page_with_js_pagination(
         StealthyFetcher.fetch(
             url,
             headless=True,
-            network_idle=False,   # evita hang em sites com analytics contínuos
+            network_idle=True,    # precisa esperar AJAX da listagem carregar
             timeout=180000,
-            wait=6000,            # espera fixa suficiente para AJAX da listagem
+            wait=3000,            # buffer adicional após network idle
             disable_resources=False,
             page_action=_paginate_action,
         )
