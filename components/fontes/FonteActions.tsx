@@ -73,6 +73,19 @@ export function FonteActions({ fonteId, status }: FonteActionsProps) {
     }
   }, [fonteId, stopPolling, router]);
 
+  // Reconecta o polling se o componente montar com um crawl já em andamento
+  // (ex.: outro usuário/aba iniciou o crawl, ou a página foi recarregada durante um crawl)
+  useEffect(() => {
+    if (status === "crawling" && !pollRef.current) {
+      setSyncing(true);
+      setError(null);
+      pollRef.current = setInterval(pollStatus, 2500);
+      // Primeira poll imediata
+      setTimeout(pollStatus, 300);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
+
   useEffect(() => {
     return () => stopPolling();
   }, [stopPolling]);
