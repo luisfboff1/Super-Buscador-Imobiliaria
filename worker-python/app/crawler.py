@@ -44,7 +44,13 @@ log = get_logger("crawler")
 
 MAX_PAGES = int(os.environ.get("CRAWL_MAX_PAGES", "200"))
 MAX_ENRICH = int(os.environ.get("CRAWL_MAX_ENRICH", "0"))  # 0 = todos (sem limite)
-CONCURRENCY = int(os.environ.get("CRAWL_CONCURRENCY", "2"))  # 2 paralelo (5 causava OOM em sites grandes como Balen 391 URLs)
+CONCURRENCY = int(os.environ.get("CRAWL_CONCURRENCY", "5"))  # paralelo (2 era conservador — 5 é seguro com Playwright por página)
+
+# Cache por domínio: se as primeiras páginas SEMPRE precisaram de stealth, pular HTTP nas demais
+# {hostname: True=stealth obrigatório, False=HTTP funciona, None=ainda aprendendo}
+_domain_stealth: dict[str, bool] = {}
+_domain_stealth_lock = __import__('threading').Lock()
+_domain_stealth_samples: dict[str, list[bool]] = {}  # hostname -> [precisou_stealth, ...]
 
 # ─── Filtros de URL ───────────────────────────────────────────────────────────
 
@@ -1621,14 +1627,43 @@ def scrape_property_page(
     """
     start = time.time()
 
-    # Tenta HTTP rápido primeiro
-    page = fetch_page(url, stealth=False)
-    source = "http"
+    # Cache de stealth por domínio: se o domínio sempre precisou de stealth, pular HTTP
+    from urllib.parse import urlparse as _urlparse
+    _hostname = _urlparse(url).hostname or ""
+    with _domain_stealth_lock:
+        _forced_stealth = _domain_stealth.get(_hostname)  # True/False/None
 
-    # Se sem conteúdo real → stealth
-    if not page or not has_real_content(page):
+    if _forced_stealth is True:
+        # Domínio confirmado como SPA/JS — pular HTTP diretamente
         page = fetch_page(url, stealth=True)
         source = "stealth"
+        needed_stealth = True
+    else:
+        # Tenta HTTP rápido primeiro
+        page = fetch_page(url, stealth=False)
+        source = "http"
+        needed_stealth = False
+
+        # Se sem conteúdo real → stealth
+        if not page or not has_real_content(page):
+            page = fetch_page(url, stealth=True)
+            source = "stealth"
+            needed_stealth = True
+
+    # Aprende o comportamento do domínio após 5 amostras
+    with _domain_stealth_lock:
+        if _hostname and _forced_stealth is None:  # ainda aprendendo
+            samples = _domain_stealth_samples.setdefault(_hostname, [])
+            samples.append(needed_stealth)
+            if len(samples) >= 5:
+                always_stealth = all(samples)
+                never_stealth = not any(samples)
+                if always_stealth:
+                    _domain_stealth[_hostname] = True
+                    log.info(f"🚀 [{_hostname}] domínio SPA confirmado — HTTP desativado (economiza ~2s/URL)")
+                elif never_stealth:
+                    _domain_stealth[_hostname] = False
+                    log.info(f"⚡ [{_hostname}] domínio SSR confirmado — usando HTTP puro")
 
     if not page:
         log.warning(f"✗ Sem resposta — {url}")
