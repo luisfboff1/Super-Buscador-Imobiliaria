@@ -1265,6 +1265,25 @@ def discover_property_urls(
                             page_num += 1
                 else:
                     progress(f"    Auto-detecção: mesmo template ou sem resultado")
+                    # Último recurso: scroll / "Carregar mais"
+                    _has_load_more_tm = False
+                    try:
+                        for el in p1_page.css("button, a[href], [role=button]"):
+                            text = (el.text or "").strip().lower()
+                            if any(kw in text for kw in ["carregar mais", "ver mais", "mostrar mais", "load more"]):
+                                _has_load_more_tm = True
+                                break
+                    except Exception:
+                        pass
+                    if _has_load_more_tm:
+                        progress(f"    📜 Fallback scroll: 'Carregar mais' encontrado — carregando...")
+                        scroll_page = fetch_page_with_scroll(listing_url, max_scrolls=50, on_progress=progress)
+                        if scroll_page:
+                            scroll_links = extract_detail_links(scroll_page, base_hostname)
+                            new_scroll = [l for l in scroll_links if l not in all_detail_urls]
+                            for l in scroll_links:
+                                all_detail_urls.add(l)
+                            progress(f"    📜 Scroll: +{len(new_scroll)} novos (total: {len(all_detail_urls)})")
             else:
                 # Tentar JS pagination (href="#") como último recurso
                 _js_pag_found = False
@@ -1380,8 +1399,13 @@ def _detect_page2_url(
                 if p2:
                     links = extract_detail_links(p2, base_hostname)
                     if links:
-                        log.info(f"    ✓ LLM param funcionou: {len(links)} imóveis")
-                        return probe
+                        # Validar que pág 2 tem itens DIFERENTES da pág 1
+                        p2_new = [l for l in links if l not in _p1]
+                        if p2_new:
+                            log.info(f"    ✓ LLM param funcionou: {len(links)} imóveis (+{len(p2_new)} novos)")
+                            return probe
+                        else:
+                            log.info(f"    ✗ LLM param: {len(links)} imóveis mas todos iguais à pág 1")
 
         # Segundo: probe com nomes de parâmetro comuns
         for param in ["pagination", "page", "pagina", "pag", "pg"]:
@@ -1392,8 +1416,14 @@ def _detect_page2_url(
             if p2:
                 links = extract_detail_links(p2, base_hostname)
                 if links:
-                    log.info(f"    ✓ Probe {param} funcionou: {len(links)} imóveis na pág 2")
-                    return probe
+                    # Validar: pág 2 DEVE ter itens diferentes da pág 1
+                    # (sites com 'Carregar mais' geralmente ignoram ?param=N via URL)
+                    p2_new = [l for l in links if l not in _p1]
+                    if p2_new:
+                        log.info(f"    ✓ Probe {param} funcionou: {len(links)} imóveis na pág 2 (+{len(p2_new)} novos)")
+                        return probe
+                    else:
+                        log.info(f"    ✗ Probe {param}: {len(links)} imóveis mas todos iguais à pág 1 — site ignora parâmetro")
                 else:
                     log.debug(f"    ✗ {param}=2 sem imóveis")
 
