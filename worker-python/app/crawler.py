@@ -717,7 +717,6 @@ REGRAS:
                 {"role": "system", "content": "Você é um especialista em análise de sites imobiliários brasileiros. Retorne SOMENTE JSON válido, sem markdown."},
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=1500,
         )
 
         if not answer:

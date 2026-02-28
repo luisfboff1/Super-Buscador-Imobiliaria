@@ -55,11 +55,10 @@ def _get_openai() -> Optional[OpenAI]:
 
 def _llm_chat(
     messages: list[dict],
-    max_tokens: int = 1000,
-    temperature: float = 0,
 ) -> Optional[str]:
     """
     Chama LLM com fallback automático: OpenAI (rápido, confiável) → Groq.
+    Sem limite de tokens — modelo decide quanto usar.
     Retorna o texto da resposta ou None.
     """
     # 1. Tentar OpenAI (confiável, sem truncamento)
@@ -87,8 +86,6 @@ def _llm_chat(
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
         )
         text = response.choices[0].message.content or ""
         usage = response.usage
@@ -142,7 +139,7 @@ def _llm_locate_from_titulo(titulo: str, url: str) -> Optional[ImovelInput]:
         },
         {"role": "user", "content": f"Título: {titulo[:300]}"},
     ]
-    raw = _llm_chat(messages, max_tokens=60, temperature=0)
+    raw = _llm_chat(messages)
     if not raw:
         return None
     try:
@@ -854,7 +851,6 @@ def extract_via_llm(html: str, url: str) -> Optional[ImovelInput]:
                 },
                 {"role": "user", "content": f"URL: {url}\n\n{clean_text}"},
             ],
-            max_tokens=1000,
         )
 
         if not text:
