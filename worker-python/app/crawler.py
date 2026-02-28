@@ -1630,6 +1630,14 @@ class CrawlStats:
         self.skipped = 0
         self.by_method = {"json-ld": 0, "css": 0, "llm": 0}
         self.start_time = time.time()
+        # Timing por fase (segundos)
+        self.phase_times: dict[str, float] = {}
+        # Qualidade
+        self.complete_count = 0
+        self.template_hits = 0
+        self.template_misses = 0
+        self.llm_calls_total = 0
+        self.pagination_type = "desconhecido"  # url_param | js_click | path | nenhuma
 
     @property
     def elapsed_s(self) -> float:
@@ -1704,8 +1712,10 @@ def execute_crawl(
 
     _push_progress("descoberta", "Buscando URLs de imóveis...", 0, 0)
 
+    _t_discovery = time.time()
     urls = discover_property_urls(site_url, on_progress=progress)
     stats.urls_found = len(urls)
+    stats.phase_times["descoberta_s"] = round(time.time() - _t_discovery, 1)
 
     if not urls:
         progress("Nenhum imóvel encontrado — finalizando")
@@ -1738,6 +1748,7 @@ def execute_crawl(
     progress(f"{'─'*50}")
 
     _push_progress("descoberta", f"{stats.urls_found} URLs encontradas. Iniciando enriquecimento...", 0, total)
+    _t_enrichment = time.time()
 
     def _enrich_one(url: str) -> tuple[str, Optional[ImovelInput]]:
         """Enriquece uma URL (roda em thread pool)."""
@@ -1829,6 +1840,8 @@ def execute_crawl(
         # Log memory stats
         progress(f"  💾 Memória: {_mem_info()}")
 
+    stats.phase_times["enriquecimento_s"] = round(time.time() - _t_enrichment, 1)
+
     # ── FASE 3: Marcar indisponíveis ──────────────────
     progress(f"\n{'─'*50}")
     progress(f"FASE 3: Marcando imóveis indisponíveis")
@@ -1836,8 +1849,10 @@ def execute_crawl(
 
     _push_progress("finalizando", "Finalizando e marcando indisponíveis...", total, total, recent_logs)
 
+    _t_finalizacao = time.time()
     disabled = mark_imoveis_indisponiveis(fonte_id, urls)
     progress(f"✓ {disabled} imóveis marcados como indisponíveis")
+    stats.phase_times["finalizacao_s"] = round(time.time() - _t_finalizacao, 1)
 
     # ── RELATÓRIO FINAL ───────────────────────────────
     n_complete = len(complete_items)
@@ -1887,6 +1902,12 @@ def execute_crawl(
             progress(f"    ... e mais {n_complete - 20}")
 
     progress(f"\n{'='*60}\n")
+
+    # Consolidar stats de template + qualidade
+    stats.complete_count = n_complete
+    stats.template_hits = template.hits
+    stats.template_misses = template.misses
+    stats.llm_calls_total = template.llm_calls
 
     # Progresso final para o frontend
     _push_progress(

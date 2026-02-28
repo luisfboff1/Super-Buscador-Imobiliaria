@@ -213,8 +213,16 @@ def _run_crawl_background(fonte_id: str) -> None:
             "urls_found": stats.urls_found,
             "enriched": stats.enriched,
             "failed": stats.failed,
+            "complete": stats.complete_count,
             "elapsed_s": round(elapsed, 1),
             "finished_at": datetime.utcnow().isoformat(),
+            "phase_times": stats.phase_times,
+            "template": {
+                "hits": stats.template_hits,
+                "misses": stats.template_misses,
+                "llm_calls": stats.llm_calls_total,
+                "hit_rate": round(stats.template_hits / (stats.template_hits + stats.template_misses) * 100) if (stats.template_hits + stats.template_misses) > 0 else 0,
+            },
         }
         crawl_history.append(entry)
         if len(crawl_history) > 50:
