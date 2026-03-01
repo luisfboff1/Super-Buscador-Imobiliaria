@@ -1130,11 +1130,24 @@ def discover_property_urls(
         # Detectar o número da página que a URL representa
         # (normalmente 2, mas _find_pagination_in_dom pode achar 3)
         _detected_pn = 2  # default
+        _offset_step = 1  # default: numeração sequencial (page=2, page=3, ...)
         for _pn_param in ["pagination", "pagina", "page", "pag", "pg", "p"]:
             _pn_match = re.search(rf"[?&]{_pn_param}=(\d+)", page2_url, re.I)
             if _pn_match:
                 _detected_pn = int(_pn_match.group(1))
                 break
+        else:
+            # Checar params de offset (start=21 → pág 2 começa no offset 21)
+            for _off_param in ["start", "offset"]:
+                _off_match = re.search(rf"[?&]{_off_param}=(\d+)", page2_url, re.I)
+                if _off_match:
+                    _off_val = int(_off_match.group(1))
+                    if _off_val > 1:
+                        # Offset-based: o 'valor' da pág 2 é o step (tamanho de página)
+                        _detected_pn = _off_val
+                        _offset_step = _off_val
+                        progress(f"    📊 Paginação por offset detectada: step={_offset_step} ({_off_param}=)")
+                    break
 
         # Converter URL da pág N em template
         template = _url_to_template(page2_url, page_num=_detected_pn)
@@ -1150,13 +1163,14 @@ def discover_property_urls(
         # Usa Playwright até confirmar que o template funciona (2 págs com resultados),
         # depois muda para HTTP puro (~1s vs ~5-30s por página).
         empty_pages = 0
-        page_num = _detected_pn + 1 if (page2_url and used_llm_hint) else _detected_pn  # Pular pág 2 só se LLM hint já processou
+        page_num = _detected_pn + _offset_step if (page2_url and used_llm_hint) else _detected_pn  # Pular pág 2 só se LLM hint já processou
         template_confirmed = confirmed_template is not None and listing_idx > 1
         consecutive_ok = 1 if (page2_url and used_llm_hint) else 0  # Pág 2 do hint já conta
         useful_pages = 2 if (page2_url and used_llm_hint) else 1  # Contador de págs com resultados
         stealth_required = False  # SPA detectado: HTTP não retorna links
+        _max_page_val = MAX_PAGES * max(_offset_step, 1)  # Para offset-based, escalar o limite
 
-        while page_num <= MAX_PAGES and empty_pages < 2:
+        while page_num <= _max_page_val and empty_pages < 2:
             page_url = template.replace("{N}", str(page_num))
 
             # Depois de confirmar template, usar HTTP puro (10x mais rápido)
@@ -1202,7 +1216,7 @@ def discover_property_urls(
                     template_confirmed = True
                     progress(f"    ✓ Template confirmado — acelerando com HTTP")
 
-            page_num += 1
+            page_num += _offset_step
 
         # ── FALLBACK: se paginação LLM foi fraca, tentar auto-detecção ──────
         # Se o LLM sugeriu ?page=N mas o correto era ?pagination=N (ou outro),
@@ -1594,6 +1608,17 @@ def _url_to_template(page2_url: str, page_num: int = 2) -> Optional[str]:
         if parsed.query:
             template += f"?{parsed.query}"
         return template
+
+    # Offset-based params: start=21, offset=21, etc.
+    # Nestes casos o valor do parâmetro é o OFFSET (não o número da página).
+    # Ex: page 2 → start=21, page 3 → start=42 (passo = 21)
+    # Substituímos o valor offset diretamente por {N}.
+    for _off_param in ["start", "offset", "inicio"]:
+        _off_m = re.search(rf"([?&]{_off_param}=)(\d+)(&|$)", page2_url, re.I)
+        if _off_m:
+            _off_val = int(_off_m.group(2))
+            if _off_val > 0:
+                return re.sub(rf"([?&]{_off_param}=)\d+(&|$)", r"\g<1>{N}\g<2>", page2_url, flags=re.I)
 
     # GENERIC FALLBACK: procurar qualquer param com valor = page_num
     # (captura params desconhecidos como "pagination", "offset", etc.)
