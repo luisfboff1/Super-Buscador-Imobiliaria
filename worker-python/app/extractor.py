@@ -301,8 +301,8 @@ def extract_quick_regex(html: str, url: str) -> Optional[ImovelInput]:
     """
     soup = BeautifulSoup(html, "lxml")
 
-    # Remove ruído
-    for tag in soup.find_all(["script", "style", "nav", "footer", "header", "noscript"]):
+    # Remove ruído — NÃO remove <header>: muitos sites colocam o preço principal no header sticky
+    for tag in soup.find_all(["script", "style", "nav", "footer", "noscript"]):
         tag.decompose()
 
     text = soup.get_text(" ", strip=True)
@@ -398,7 +398,9 @@ def _extract_preco(text: str) -> Optional[float]:
             # Remove pontos de milhar, troca vírgula por ponto
             clean = m.replace(".", "").replace(",", ".")
             val = float(clean)
-            if val > 10_000:  # preço realista de imóvel
+            # Preço realista: acima de R$10k mas abaixo de R$500M
+            # (> R$500M é claramente erro de digitação no CRM da imobiliária)
+            if 10_000 < val < 500_000_000:
                 precos.append(val)
         except ValueError:
             continue
@@ -431,12 +433,12 @@ def _detect_tipo(titulo: str, text: str) -> Optional[str]:
         ("loft", r"\bloft\b"),
         ("apartamento", r"apartamento|\bapto?\b|\bap\b"),
         ("casa", r"\bcasa\b"),
-        ("terreno", r"terreno|\blote\b"),
-        ("chacara", r"ch[áa]cara|s[íi]tio"),
-        ("galpao", r"galp[ãa]o|barrac[ãa]o"),
-        ("sala", r"\bsala comercial\b"),
-        ("loja", r"\bloja\b"),
-        ("pavilhao", r"pavilh[ãa]o"),
+        ("terreno", r"terreno|\blote\b|terrenos|lotes"),
+        ("chacara", r"ch[áa]cara|s[íi]tio|chácaras"),
+        ("galpao", r"galp[ãa]o|barrac[ãa]o|galpoes"),
+        ("sala", r"\bsala comercial\b|salas?[\s\-]?comerciais?"),
+        ("loja", r"\bloja[s]?\b"),
+        ("pavilhao", r"pavilh[ãa]o|pavilh[õo]es|pavilhes"),
         ("comercial", r"comercial|ponto comercial"),
         ("rural", r"\brural\b|\bfazenda\b"),
         ("condominio", r"condom[íi]nio fechado"),
@@ -1056,9 +1058,9 @@ def html_to_clean_text(html: str) -> str:
     if title_tag:
         page_title = title_tag.get_text(strip=True)
 
-    # Remove ruído
+    # Remove ruído — NÃO remove <header>: pode conter o preço principal (ex: Antonella)
     for tag in soup.find_all([
-        "script", "style", "iframe", "noscript", "svg", "nav", "header", "footer",
+        "script", "style", "iframe", "noscript", "svg", "nav", "footer",
     ]):
         tag.decompose()
 
@@ -1486,12 +1488,18 @@ def extract_property_data(
                     # Garagem mencionada sem número → 1 vaga
                     tpl_result.vagas = 1
 
-            # ── Inferir tipo da URL se template não o extraiu
-            if tpl_result.tipo is None:
-                url_tipo = _detect_tipo("", url.replace("-", " ").replace("/", " "))
-                if url_tipo:
+            # ── Inferir/corrigir tipo da URL (URL é fonte autoritativa de tipo)
+            # Ex: /pavilhes/ → pavilhao, /salas-comerciais/ → sala, /terrenos/ → terreno
+            # Sempre sobrescreve template quando URL tem slug de tipo explícito
+            url_tipo = _detect_tipo("", url.replace("-", " ").replace("/", " "))
+            if url_tipo:
+                if tpl_result.tipo is None:
                     tpl_result.tipo = url_tipo
                     log.debug(f"  🔍 tipo da URL: {url_tipo}")
+                elif tpl_result.tipo != url_tipo:
+                    # URL tem prioridade: mais confiável que CSS selector do template
+                    log.debug(f"  🔍 tipo URL override: '{tpl_result.tipo}' → '{url_tipo}'")
+                    tpl_result.tipo = url_tipo
 
             tpl_result.imagens = imagens if imagens else tpl_result.imagens
 
