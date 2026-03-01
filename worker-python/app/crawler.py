@@ -1150,7 +1150,8 @@ def discover_property_urls(
                     break
 
         # Converter URL da pág N em template
-        template = _url_to_template(page2_url, page_num=_detected_pn)
+        # Passa listing_url para diff inteligente (detecta qualquer param, incluindo start=N)
+        template = _url_to_template(page2_url, page_num=_detected_pn, listing_url=listing_url)
         if template:
             progress(f"    Template: {template}")
         else:
@@ -1230,7 +1231,7 @@ def discover_property_urls(
                 page1_links=set(page1_links),
             )
             if fallback_p2:
-                fallback_template = _url_to_template(fallback_p2, page_num=2)
+                fallback_template = _url_to_template(fallback_p2, page_num=2, listing_url=listing_url)
                 if fallback_template and fallback_template != template:
                     progress(f"    ⚡ Auto-detecção achou template diferente: {fallback_template}")
                     # Processar pág 2 do fallback
@@ -1579,25 +1580,83 @@ def _detect_page2_url(
     return None
 
 
-def _url_to_template(page2_url: str, page_num: int = 2) -> Optional[str]:
-    """Converte URL da página N em template com {N}."""
+def _url_to_template(page2_url: str, page_num: int = 2, listing_url: Optional[str] = None) -> Optional[str]:
+    """
+    Converte URL da página N em template com {N}.
+
+    Abordagem principal: DIFF inteligente entre listing_url e page2_url.
+    Se listing_url for fornecida, compara os query params das duas URLs e encontra
+    qual param mudou/apareceu — independente do nome (page, start, offset, p, etc.).
+    Isso funciona com qualquer convenção de paginação sem lista hardcoded.
+
+    Fallbacks para quando listing_url não está disponível:
+    - Params conhecidos por nome (page, pagina, pagination, pag, pg, p)
+    - Path-based (/pagina/2/, último segmento numérico)
+    - Qualquer param numérico que não seja filtro conhecido
+    """
+    from urllib.parse import parse_qs, urlencode, urlunparse
+
     pn = str(page_num)
+    skip_params = {"min", "max", "limit", "id", "cod", "ref", "ordem", "sort",
+                   "order", "tipo", "finalidade", "ordenacao", "cidade", "bairro",
+                   "estado", "categoria", "subtipo", "quartos", "vagas", "area"}
 
-    # Query-based patterns (nomes conhecidos de parâmetros de paginação)
-    known_params = ["pagina", "page", "pag", "pg", "pagination", "p"]
+    # ── FASE 1: Diff inteligente listing_url ↔ page2_url ────────────────────
+    # Encontra qual param mudou ou foi adicionado — sem depender do nome.
+    if listing_url:
+        try:
+            p1 = urlparse(listing_url)
+            p2 = urlparse(page2_url)
+            qs1 = parse_qs(p1.query, keep_blank_values=True)
+            qs2 = parse_qs(p2.query, keep_blank_values=True)
+
+            # Params que apareceram ou mudaram de valor em page2_url
+            changed: list[tuple[str, str]] = []  # [(param_name, new_value)]
+            for k, vals in qs2.items():
+                v = vals[0] if vals else ""
+                orig = qs1.get(k, [""])[0]
+                if v != orig and v.lstrip("-").isdigit():
+                    if k.lower() not in skip_params:
+                        changed.append((k, v))
+
+            if len(changed) >= 1:
+                # Usar o param com menor valor absoluto (mais provável ser índice de página)
+                # ou o único que mudou
+                if len(changed) == 1:
+                    pag_param, pag_val = changed[0]
+                else:
+                    pag_param, pag_val = sorted(changed, key=lambda x: abs(int(x[1])))[0]
+                log.info(f"  🎯 Diff detectou param de paginação: '{pag_param}'={pag_val}")
+
+                # Substituição direta na string original (evita URL-encoding de {N})
+                # Regex substitui o valor numérico desse param por {N}
+                pattern = rf"([?&]{re.escape(pag_param)}=){re.escape(pag_val)}(&|$)"
+                result = re.sub(pattern, r"\g<1>{N}\g<2>", page2_url)
+                if "{N}" in result:
+                    return result
+        except Exception as e:
+            log.debug(f"  Diff falhou ({e}), usando fallback por nome")
+
+    # ── FASE 2: Fallbacks por nome de param (sem listing_url) ────────────────
+
+    # Query-based — nomes tradicionais de paginação
+    known_params = ["pagina", "page", "pag", "pg", "pagination", "p",
+                    "start", "offset", "inicio", "from"]
     for param in known_params:
-        pattern = rf"([?&]{param}=){pn}(&|$)"
-        if re.search(pattern, page2_url, re.I):
-            return re.sub(pattern, r"\g<1>{N}\g<2>", page2_url, flags=re.I)
+        pattern = rf"([?&]{param}=)(\d+)(&|$)"
+        m = re.search(pattern, page2_url, re.I)
+        if m:
+            # Qualquer valor numérico serve — é o step para offset-based
+            return re.sub(pattern, r"\g<1>{N}\g<3>", page2_url, flags=re.I)
 
-    # Path-based patterns
+    # Path-based — /pagina/2/, /page/2/, etc.
     path_params = ["pagina", "page", "pag", "pg"]
     for param in path_params:
         pattern = rf"(/{param}/){pn}(/|$)"
         if re.search(pattern, page2_url, re.I):
             return re.sub(pattern, r"\g<1>{N}\g<2>", page2_url, flags=re.I)
 
-    # Path-based: último segmento é o número → trocar por {N}
+    # Path-based — último segmento é número
     parsed = urlparse(page2_url)
     path = parsed.path.rstrip("/")
     segments = path.split("/")
@@ -1609,25 +1668,13 @@ def _url_to_template(page2_url: str, page_num: int = 2) -> Optional[str]:
             template += f"?{parsed.query}"
         return template
 
-    # Offset-based params: start=21, offset=21, etc.
-    # Nestes casos o valor do parâmetro é o OFFSET (não o número da página).
-    # Ex: page 2 → start=21, page 3 → start=42 (passo = 21)
-    # Substituímos o valor offset diretamente por {N}.
-    for _off_param in ["start", "offset", "inicio"]:
-        _off_m = re.search(rf"([?&]{_off_param}=)(\d+)(&|$)", page2_url, re.I)
-        if _off_m:
-            _off_val = int(_off_m.group(2))
-            if _off_val > 0:
-                return re.sub(rf"([?&]{_off_param}=)\d+(&|$)", r"\g<1>{N}\g<2>", page2_url, flags=re.I)
-
-    # GENERIC FALLBACK: procurar qualquer param com valor = page_num
-    # (captura params desconhecidos como "pagination", "offset", etc.)
-    skip_params = {"min", "max", "limit", "id", "cod", "ref", "ordem", "sort", "order", "tipo", "finalidade"}
-    for match in re.finditer(rf"([?&])(\w+)={pn}(&|$)", page2_url):
+    # Fallback genérico — qualquer param numérico que não seja filtro
+    for match in re.finditer(rf"([?&])(\w+)=(\d+)(&|$)", page2_url):
         param_name = match.group(2).lower()
-        if param_name not in skip_params:
-            actual_param = match.group(2)  # Preservar case original
-            pattern = rf"([?&]{re.escape(actual_param)}=){pn}(&|$)"
+        param_val = match.group(3)
+        if param_name not in skip_params and param_val == pn:
+            actual_param = match.group(2)
+            pattern = rf"([?&]{re.escape(actual_param)}=){re.escape(pn)}(&|$)"
             return re.sub(pattern, r"\g<1>{N}\g<2>", page2_url)
 
     return None
