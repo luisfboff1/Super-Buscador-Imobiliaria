@@ -49,7 +49,7 @@ interface ImoveisStats {
 }
 
 async function getImoveisStats(fonteId: string): Promise<ImoveisStats> {
-  const [row] = await db.execute(sql`
+  const res = await db.execute(sql`
     SELECT
       COUNT(*)::int AS total,
       COUNT(preco)::int AS com_preco,
@@ -74,9 +74,9 @@ async function getImoveisStats(fonteId: string): Promise<ImoveisStats> {
       COUNT(CASE WHEN preco IS NOT NULL AND preco::numeric > 50000000 THEN 1 END)::int AS preco_max_suspeito
     FROM imoveis
     WHERE fonte_id = ${fonteId}
-  `.mapWith(r => r));
+  `);
 
-  const r = row as any;
+  const r = res.rows[0] as any;
 
   // tipos distribution
   const tipoRows = await db.execute(sql`

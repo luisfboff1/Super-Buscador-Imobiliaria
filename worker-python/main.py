@@ -198,6 +198,7 @@ def _run_crawl_background(fonte_id: str) -> None:
             cidade=fonte.cidade,
             estado=fonte.estado,
             on_progress=on_progress,
+            site_config=fonte.config,
         )
 
         # 5. Marcar como OK

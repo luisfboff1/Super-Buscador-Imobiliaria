@@ -109,6 +109,7 @@ class Fonte:
         self.cidade: Optional[str] = row.get("cidade")
         self.estado: Optional[str] = row.get("estado")
         self.status: Optional[str] = row.get("status")
+        self.config: dict = row.get("config") or {}
 
     def __repr__(self):
         return f"Fonte({self.nome!r}, {self.url!r})"

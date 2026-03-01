@@ -204,8 +204,15 @@ def fetch_page_with_scroll(url: str, max_scrolls: int = 50,
                 'button:has-text("ver mais")',
                 'button:has-text("Mostrar mais")',
                 'button:has-text("Load more")',
+                'button:has-text("Mais imóveis")',
+                'button:has-text("mais imóveis")',
+                'button:has-text("Ver todos")',
                 'a:has-text("Carregar mais")',
                 'a:has-text("Ver mais")',
+                'a:has-text("Mais imóveis")',
+                'a:has-text("+ Mais imóveis")',
+                'a:has-text("Ver todos imóveis")',
+                'a:has-text("Ver todos")',
                 '[class*="load-more"]',
                 '[class*="loadmore"]',
             ]:
@@ -306,10 +313,14 @@ def fetch_page_with_js_pagination(
         for pg in range(2, max_pages + 1):
             # Clicar no botão da página
             click_result = page.evaluate("""(pageNum) => {
-                // Procurar no #pagination ou .pagination
-                const containers = document.querySelectorAll('#pagination, .pagination, [class*=paginat], nav[aria-label*=paginat]');
-                for (const container of containers) {
-                    const links = container.querySelectorAll('a');
+                // Procurar no #pagination, .pagination, paginacao, etc.
+                const containers = document.querySelectorAll(
+                    '#pagination, .pagination, [class*=paginat], [class*=pagina], ' +
+                    'nav[aria-label*=paginat], nav[aria-label*=pag], ul.pages, ' +
+                    '.pages, .paginator, [data-pagination], [class*=page-nav], [class*=pagenav]'
+                );
+                // Função helper para clicar em elemento numérico/próximo
+                function tryClickNumeric(links) {
                     for (const a of links) {
                         const text = a.textContent.trim();
                         if (text === String(pageNum)) {
@@ -317,10 +328,9 @@ def fetch_page_with_js_pagination(
                             return 'clicked';
                         }
                     }
+                    return null;
                 }
-                // Tentar botão "próximo" / "»"
-                for (const container of containers) {
-                    const links = container.querySelectorAll('a');
+                function tryClickNext(links) {
                     for (const a of links) {
                         const text = a.textContent.trim();
                         if (text === '»' || text === '>' || text.toLowerCase().includes('próx') || text.toLowerCase().includes('next')) {
@@ -331,7 +341,23 @@ def fetch_page_with_js_pagination(
                             return 'clicked_next';
                         }
                     }
+                    return null;
                 }
+                // 1. Tentar em containers específicos de paginação
+                for (const container of containers) {
+                    const r = tryClickNumeric(container.querySelectorAll('a, button'));
+                    if (r) return r;
+                }
+                for (const container of containers) {
+                    const r = tryClickNext(container.querySelectorAll('a, button'));
+                    if (r) return r;
+                }
+                // 2. Fallback: procurar em TODOS os <a> e <button> visíveis com texto numérico
+                const allLinks = document.querySelectorAll('a, button');
+                const r2 = tryClickNumeric(allLinks);
+                if (r2) return r2;
+                const r3 = tryClickNext(allLinks);
+                if (r3) return r3;
                 return 'not_found';
             }""", pg)
 
@@ -789,6 +815,7 @@ REGRAS:
 def discover_property_urls(
     site_url: str,
     on_progress: Optional[Callable[[str], None]] = None,
+    site_config: Optional[dict] = None,
 ) -> list[str]:
     """
     Descobre todas as URLs de imóveis de um site imobiliário (venda + aluguel).
@@ -798,6 +825,9 @@ def discover_property_urls(
     2. Fallback: testa URLs comuns (hardcoded)
     3. Usa paginação do LLM OU detecta automaticamente
     4. Navega todas as páginas coletando links de detalhe
+    
+    site_config: config opcional do DB (ex: {"listing_urls": ["https://..."]}).
+    Se definido com listing_urls, pula a Fase 1 e usa essas URLs diretamente.
     """
     progress = on_progress or log.info
     base_url = site_url.rstrip("/")
@@ -818,58 +848,82 @@ def discover_property_urls(
     # SEMPRE usa Playwright — renderiza JS, SPAs, botões, tudo.
     used_stealth = True
 
+    # ── 0. Config preset: listing_urls definidas no DB ────────────────────────
+    _preset_listing_urls: list[str] = (
+        site_config.get("listing_urls", site_config.get("listingUrls", []))
+        if site_config else []
+    )
+
     # Conjunto de URLs finais já vistas (para dedup de redirects)
     seen_final_urls: set[str] = set()
 
-    # 1a. Fetch homepage e pedir LLM para analisar
-    progress(f"  Buscando homepage (Playwright): {base_url}")
-    homepage = fetch_page(base_url, stealth=True)
+    # ── 0. Preset listing_urls do DB (pula Phase 1 se configurado) ─────────
+    if _preset_listing_urls:
+        progress(f"  📋 Usando listing_urls do config ({len(_preset_listing_urls)} URL(s))")
+        for preset_url in _preset_listing_urls:
+            progress(f"  Testando listagem (preset): {preset_url}")
+            p_page = fetch_page(preset_url, stealth=True)
+            if p_page:
+                final_url = getattr(p_page, 'url', preset_url) or preset_url
+                seen_final_urls.add(final_url)
+                links = extract_detail_links(p_page, base_hostname)
+                progress(f"  ↳ {len(links)} imóveis encontrados")
+                if len(links) >= 1:
+                    listing_urls.append(final_url)
+                    listing_cache[final_url] = (p_page, links)
+            else:
+                progress(f"  ↳ Sem resposta para {preset_url}")
 
-    if homepage:
-        homepage_html = safe_html(homepage)
+    # ── 1a. Fetch homepage e pedir LLM para analisar (só se sem preset) ─────
+    if not listing_urls:
+        progress(f"  Buscando homepage (Playwright): {base_url}")
+        homepage = fetch_page(base_url, stealth=True)
 
-        # Pedir análise completa ao LLM
-        progress(f"  🤖 Pedindo análise do site ao LLM...")
-        site_analysis = _llm_analyze_site(homepage_html, site_url, on_progress=progress)
+        if homepage:
+            homepage_html = safe_html(homepage)
 
-        if site_analysis:
-            # Extrair paginação hint
-            llm_pagination_hint = site_analysis.get("paginacao")
+            # Pedir análise completa ao LLM
+            progress(f"  🤖 Pedindo análise do site ao LLM...")
+            site_analysis = _llm_analyze_site(homepage_html, site_url, on_progress=progress)
 
-            # Testar cada listagem que o LLM identificou
-            for lst in site_analysis.get("listagens", []):
-                llm_url = lst.get("url", "").strip()
-                lst_tipo = lst.get("tipo", "?")
-                if not llm_url or not llm_url.startswith("http"):
-                    continue
+            if site_analysis:
+                # Extrair paginação hint
+                llm_pagination_hint = site_analysis.get("paginacao")
 
-                # Pré-check: se a URL crua já é uma URL final conhecida, pular sem fetch
-                if llm_url in seen_final_urls:
-                    progress(f"  Pulando listagem ({lst_tipo}): {llm_url} (já vista)")
-                    continue
-
-                progress(f"  Testando listagem ({lst_tipo}): {llm_url}")
-                llm_page = fetch_page(llm_url, stealth=True)
-                if llm_page:
-                    # URL final pós-redirect (ex: /alugar/ → /alugar/cidade/caxias-do-sul/1/)
-                    final_url = getattr(llm_page, 'url', llm_url) or llm_url
-                    if final_url in seen_final_urls:
-                        progress(f"  ↳ Duplicada (redireciona para URL já vista), pulando")
+                # Testar cada listagem que o LLM identificou
+                for lst in site_analysis.get("listagens", []):
+                    llm_url = lst.get("url", "").strip()
+                    lst_tipo = lst.get("tipo", "?")
+                    if not llm_url or not llm_url.startswith("http"):
                         continue
-                    seen_final_urls.add(final_url)
-                    seen_final_urls.add(llm_url)  # Guardar URL original também
 
-                    links = extract_detail_links(llm_page, base_hostname)
-                    progress(f"  ↳ {len(links)} imóveis encontrados")
-                    if len(links) >= 1:
-                        listing_urls.append(final_url)
-                        listing_tipos[final_url] = lst_tipo
-                        # Cache: salvar page + links para reutilizar na Fase 2
-                        listing_cache[final_url] = (llm_page, links)
+                    # Pré-check: se a URL crua já é uma URL final conhecida, pular sem fetch
+                    if llm_url in seen_final_urls:
+                        progress(f"  Pulando listagem ({lst_tipo}): {llm_url} (já vista)")
+                        continue
+
+                    progress(f"  Testando listagem ({lst_tipo}): {llm_url}")
+                    llm_page = fetch_page(llm_url, stealth=True)
+                    if llm_page:
+                        # URL final pós-redirect (ex: /alugar/ → /alugar/cidade/caxias-do-sul/1/)
+                        final_url = getattr(llm_page, 'url', llm_url) or llm_url
+                        if final_url in seen_final_urls:
+                            progress(f"  ↳ Duplicada (redireciona para URL já vista), pulando")
+                            continue
+                        seen_final_urls.add(final_url)
+                        seen_final_urls.add(llm_url)  # Guardar URL original também
+
+                        links = extract_detail_links(llm_page, base_hostname)
+                        progress(f"  ↳ {len(links)} imóveis encontrados")
+                        if len(links) >= 1:
+                            listing_urls.append(final_url)
+                            listing_tipos[final_url] = lst_tipo
+                            # Cache: salvar page + links para reutilizar na Fase 2
+                            listing_cache[final_url] = (llm_page, links)
+                        else:
+                            progress(f"  ↳ 0 imóveis, descartando")
                     else:
-                        progress(f"  ↳ 0 imóveis, descartando")
-                else:
-                    progress(f"  ↳ Sem resposta")
+                        progress(f"  ↳ Sem resposta")
 
     # 1b. Fallback: tentar URLs hardcoded se LLM não achou nada
     if not listing_urls:
@@ -1087,13 +1141,18 @@ def discover_property_urls(
                 else:
                     progress(f"    ✗ Scroll falhou")
             else:
-                # ── Fallback 2: JS pagination (href="#" com números de página) ──
+                # ── Fallback 2: JS pagination (href="#" / javascript: com números de página) ──
                 # Detectar botões de paginação JavaScript
                 has_js_pagination = False
                 try:
-                    for container in page.css("#pagination, .pagination, [class*=paginat]"):
-                        page_links = container.css("a")
-                        # Verificar se há links com href="#" e texto numérico
+                    _pag_selectors = (
+                        "#pagination, .pagination, [class*=paginat], [class*=pagina], "
+                        ".pages, .paginator, nav[aria-label*=pag], ul.pages, "
+                        "[data-pagination], [class*=page-nav], [class*=pagenav]"
+                    )
+                    for container in page.css(_pag_selectors):
+                        page_links = container.css("a, button")
+                        # Verificar se há links/botões com href JS e texto numérico
                         numeric_buttons = 0
                         for a in page_links:
                             try:
@@ -1104,7 +1163,12 @@ def discover_property_urls(
                                     spans = a.css("span")
                                     if spans:
                                         text = (spans[0].text or "").strip()
-                                if (href == "#" or href == "") and text.isdigit():
+                                # Aceitar href="#", href="" ou href="javascript:..."
+                                href_is_js = (
+                                    href == "#" or href == ""
+                                    or href.lower().startswith("javascript:")
+                                )
+                                if href_is_js and text.isdigit():
                                     numeric_buttons += 1
                             except Exception:
                                 continue
@@ -1115,7 +1179,7 @@ def discover_property_urls(
                     pass
 
                 if has_js_pagination:
-                    progress(f"    📄 Detectado JS pagination (href='#') — clicando páginas...")
+                    progress(f"    📄 Detectado JS pagination — clicando páginas...")
                     js_links = fetch_page_with_js_pagination(
                         listing_url, base_hostname, max_pages=50, on_progress=progress
                     )
@@ -1124,7 +1188,39 @@ def discover_property_urls(
                         all_detail_urls.add(l)
                     progress(f"    📄 JS paginação: +{len(new_js)} novos (total: {len(all_detail_urls)})")
                 else:
-                    progress(f"    Sem paginação detectada")
+                    # ── Fallback 3: JS pagination dinâmica (last resort) ────────────
+                    # Botões de paginação podem ser renderizados dinamicamente
+                    # ou usar selectores não cobertos acima.
+                    # Tentar clicar paginação JS diretamente com Playwright.
+                    if page1_links:
+                        progress(f"    🔄 JS pagination dinâmica (last resort)...")
+                        js_links_lr = fetch_page_with_js_pagination(
+                            listing_url, base_hostname, max_pages=50, on_progress=progress
+                        )
+                        new_js_lr = [l for l in js_links_lr if l not in all_detail_urls]
+                        if new_js_lr:
+                            for l in js_links_lr:
+                                all_detail_urls.add(l)
+                            progress(f"    📄 JS paginação (last resort): +{len(new_js_lr)} novos (total: {len(all_detail_urls)})")
+                        else:
+                            # ── Fallback 4: scroll infinito / Carregar mais dinâmico ──
+                            progress(f"    🔄 Scroll/Carregar mais (last resort)...")
+                            scroll_page_lr = fetch_page_with_scroll(
+                                listing_url, max_scrolls=50, on_progress=progress
+                            )
+                            if scroll_page_lr:
+                                scroll_links_lr = extract_detail_links(scroll_page_lr, base_hostname)
+                                new_scroll_lr = [l for l in scroll_links_lr if l not in all_detail_urls]
+                                if new_scroll_lr:
+                                    for l in scroll_links_lr:
+                                        all_detail_urls.add(l)
+                                    progress(f"    📜 Scroll (last resort): +{len(new_scroll_lr)} novos (total: {len(all_detail_urls)})")
+                                else:
+                                    progress(f"    Sem paginação detectada")
+                            else:
+                                progress(f"    Sem paginação detectada")
+                    else:
+                        progress(f"    Sem paginação detectada")
             continue
 
         # Detectar o número da página que a URL representa
@@ -1219,6 +1315,31 @@ def discover_property_urls(
 
             page_num += _offset_step
 
+        # ── FALLBACK especial: template URL encontrada mas não funcionou ────────
+        # Ex: site session-based onde ?pagina=2 requer cookie de sessão da pág 1.
+        # Solução: usar JS pagination (Playwright) que mantém a sessão.
+        if not used_llm_hint and useful_pages <= 1 and p1_page:
+            progress(f"    ⚠️ Template URL sem novos resultados (session-based?), tentando JS pagination...")
+            js_links_sf = fetch_page_with_js_pagination(
+                listing_url, base_hostname, max_pages=50, on_progress=progress
+            )
+            new_js_sf = [l for l in js_links_sf if l not in all_detail_urls]
+            if new_js_sf:
+                for l in js_links_sf:
+                    all_detail_urls.add(l)
+                progress(f"    📄 JS paginação (session fallback): +{len(new_js_sf)} novos (total: {len(all_detail_urls)})")
+            else:
+                # Tentar scroll como último recurso
+                progress(f"    🔄 Scroll (session fallback)...")
+                scroll_sf = fetch_page_with_scroll(listing_url, max_scrolls=50, on_progress=progress)
+                if scroll_sf:
+                    scroll_sf_links = extract_detail_links(scroll_sf, base_hostname)
+                    new_scroll_sf = [l for l in scroll_sf_links if l not in all_detail_urls]
+                    if new_scroll_sf:
+                        for l in scroll_sf_links:
+                            all_detail_urls.add(l)
+                        progress(f"    📜 Scroll (session fallback): +{len(new_scroll_sf)} novos (total: {len(all_detail_urls)})")
+
         # ── FALLBACK: se paginação LLM foi fraca, tentar auto-detecção ──────
         # Se o LLM sugeriu ?page=N mas o correto era ?pagination=N (ou outro),
         # a paginação morre rápido. Nesse caso, tentar auto-detect via DOM/probing.
@@ -1306,16 +1427,18 @@ def discover_property_urls(
                                 all_detail_urls.add(l)
                             progress(f"    📜 Scroll: +{len(new_scroll)} novos (total: {len(all_detail_urls)})")
             else:
-                # Tentar JS pagination (href="#") como último recurso
+                # Tentar JS pagination como último recurso
                 _js_pag_found = False
                 if p1_page:
                     try:
-                        for sel in ["#pagination", ".pagination", ".paginacao", "[class*=pagina]", "nav[aria-label*=pag]", "ul.pages"]:
-                            container = p1_page.css(sel)
-                            if not container:
-                                continue
+                        _pag_sels = (
+                            "#pagination, .pagination, .paginacao, [class*=pagina], "
+                            "nav[aria-label*=pag], ul.pages, .pages, .paginator, "
+                            "[data-pagination], [class*=page-nav], [class*=pagenav]"
+                        )
+                        for container in p1_page.css(_pag_sels):
                             numeric_buttons = 0
-                            for a in container[0].css("a"):
+                            for a in container.css("a, button"):
                                 try:
                                     href = (a.attrib.get("href", "") or "").strip()
                                     text = (a.text or "").strip()
@@ -1324,7 +1447,11 @@ def discover_property_urls(
                                         spans = a.css("span")
                                         if spans:
                                             text = (spans[0].text or "").strip()
-                                    if (href == "#" or href == "") and text.isdigit():
+                                    href_is_js = (
+                                        href == "#" or href == ""
+                                        or href.lower().startswith("javascript:")
+                                    )
+                                    if href_is_js and text.isdigit():
                                         numeric_buttons += 1
                                 except Exception:
                                     continue
@@ -1344,7 +1471,32 @@ def discover_property_urls(
                         all_detail_urls.add(l)
                     progress(f"    📄 JS paginação: +{len(new_js)} novos (total: {len(all_detail_urls)})")
                 else:
-                    progress(f"    Auto-detecção: sem paginação encontrada")
+                    # Último recurso: tentar JS pagination e scroll sem detecção prévia
+                    progress(f"    🔄 JS pagination dinâmica (last resort)...")
+                    js_links_lr2 = fetch_page_with_js_pagination(
+                        listing_url, base_hostname, max_pages=50, on_progress=progress
+                    )
+                    new_js_lr2 = [l for l in js_links_lr2 if l not in all_detail_urls]
+                    if new_js_lr2:
+                        for l in js_links_lr2:
+                            all_detail_urls.add(l)
+                        progress(f"    📄 JS paginação (last resort): +{len(new_js_lr2)} novos (total: {len(all_detail_urls)})")
+                    else:
+                        progress(f"    🔄 Scroll/Carregar mais (last resort)...")
+                        scroll_page_lr2 = fetch_page_with_scroll(
+                            listing_url, max_scrolls=50, on_progress=progress
+                        )
+                        if scroll_page_lr2:
+                            scroll_links_lr2 = extract_detail_links(scroll_page_lr2, base_hostname)
+                            new_scroll_lr2 = [l for l in scroll_links_lr2 if l not in all_detail_urls]
+                            if new_scroll_lr2:
+                                for l in scroll_links_lr2:
+                                    all_detail_urls.add(l)
+                                progress(f"    📜 Scroll (last resort): +{len(new_scroll_lr2)} novos (total: {len(all_detail_urls)})")
+                            else:
+                                progress(f"    Auto-detecção: sem paginação encontrada")
+                        else:
+                            progress(f"    Auto-detecção: sem paginação encontrada")
 
         # Salvar template confirmado para reutilizar nas listagens seguintes
         if template_confirmed and confirmed_template is None:
@@ -1821,6 +1973,7 @@ def execute_crawl(
     cidade: Optional[str],
     estado: Optional[str],
     on_progress: Optional[Callable[[str], None]] = None,
+    site_config: Optional[dict] = None,
 ) -> CrawlStats:
     """
     Executa crawl completo de uma fonte.
@@ -1860,7 +2013,7 @@ def execute_crawl(
     _push_progress("descoberta", "Buscando URLs de imóveis...", 0, 0)
 
     _t_discovery = time.time()
-    urls = discover_property_urls(site_url, on_progress=progress)
+    urls = discover_property_urls(site_url, on_progress=progress, site_config=site_config)
     stats.urls_found = len(urls)
     stats.phase_times["descoberta_s"] = round(time.time() - _t_discovery, 1)
 
