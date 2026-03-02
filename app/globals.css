@@ -129,7 +129,7 @@ html, body {
 .sidebar-user-plan { font-size: 10.5px; color: var(--sidebar-text); }
 
 /* ===== MAIN CONTENT ===== */
-.main-content { margin-left: 240px; min-height: 100vh; display: flex; flex-direction: column; }
+.main-content { margin-left: 240px; min-height: 100vh; display: flex; flex-direction: column; flex: 1; width: 0; min-width: 0; }
 
 .topbar {
   background: rgba(255,255,255,0.8);
