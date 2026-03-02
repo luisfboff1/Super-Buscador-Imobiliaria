@@ -1,5 +1,5 @@
 """
-Script para rodar TODAS as 13 fontes sequencialmente,
+Script para rodar TODAS as 14 fontes sequencialmente,
 monitorar progresso e gerar relatório final.
 """
 import requests, time, json, sys
@@ -23,6 +23,7 @@ FONTES = [
     ("9954c887-d795-4ea5-98f8-8a46b4d69dd7", "Balen"),
     ("69101545-d4a0-46d1-90e7-935469cdf024", "Bassanesi"),
     ("c9bcf321-3e40-498b-bdb4-f76842dbcb17", "Nichele"),
+    ("afb1446e-2564-49b3-b690-34373ba5539b", "Perfeccto"),
 ]
 
 
