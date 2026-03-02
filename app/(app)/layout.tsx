@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
-import { Sidebar } from "@/components/layout/Sidebar";
+import { ClientLayout } from "@/components/layout/ClientLayout";
 import { getNavStats } from "@/lib/db/queries";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -16,16 +16,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const { fontesUsed, fontesErroCount } = await getNavStats();
 
   return (
-    <div className="app-layout">
-      <Sidebar
-        userName={userName}
-        userPlan="Plano Gratuito"
-        userInitial={userInitial}
-        fontesUsed={fontesUsed}
-        fontesTotal={5}
-        fontesErroCount={fontesErroCount}
-      />
-      <main className="main-content">{children}</main>
-    </div>
+    <ClientLayout
+      userName={userName}
+      userPlan="Plano Gratuito"
+      userInitial={userInitial}
+      fontesUsed={fontesUsed}
+      fontesTotal={5}
+      fontesErroCount={fontesErroCount}
+    >
+      {children}
+    </ClientLayout>
   );
 }

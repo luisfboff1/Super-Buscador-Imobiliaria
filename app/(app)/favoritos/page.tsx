@@ -38,7 +38,7 @@ export default async function FavoritosPage() {
             </Link>
           </div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "14px" }}>
+          <div className="grid-3">
             {favoritos.map((fav) => (
               <div key={fav.id} className="imovel-card">
                 <div className="imovel-img">

@@ -89,7 +89,7 @@ export default async function DashboardPage() {
         </div>
 
         {/* Main grid */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: "20px", marginTop: "8px" }}>
+        <div className="grid-sidebar">
           {/* Recent searches */}
           <div className="card">
             <div className="card-header">

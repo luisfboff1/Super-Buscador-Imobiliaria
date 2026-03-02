@@ -57,7 +57,7 @@ export default async function FontesPage() {
           </div>
         )}
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "14px" }}>
+        <div className="grid-2">
           {fontes.map((fonte) => {
             const s = statusLabel[fonte.status] ?? statusLabel.pendente;
             const lastCrawlDate = fonte.lastCrawl ? new Date(fonte.lastCrawl) : null;
