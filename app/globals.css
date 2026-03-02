@@ -412,6 +412,7 @@ tr:hover td { background: rgba(241,245,249,0.5); }
 .auth-mobile-logo-text { font-size: 15px; font-weight: 700; color: #0f172a; }
 
 /* ===== MOBILE SIDEBAR OVERLAY ===== */
+.sidebar-overlay {
   display: none; position: fixed; inset: 0;
   background: rgba(0,0,0,0.52); z-index: 95;
   backdrop-filter: blur(2px);
