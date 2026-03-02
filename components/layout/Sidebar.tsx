@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutGrid, Search, Clock, Link2, Settings, Heart } from "lucide-react";
+import { LayoutGrid, Search, Clock, Link2, Settings, Heart, X } from "lucide-react";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutGrid, section: "Principal" },
@@ -20,6 +20,8 @@ interface SidebarProps {
   fontesUsed?: number;
   fontesTotal?: number;
   fontesErroCount?: number;
+  open?: boolean;
+  onClose?: () => void;
 }
 
 export function Sidebar({
@@ -29,6 +31,8 @@ export function Sidebar({
   fontesUsed = 0,
   fontesTotal = 5,
   fontesErroCount = 0,
+  open = false,
+  onClose,
 }: SidebarProps) {
   const pathname = usePathname();
   const fontesPercent = fontesTotal > 0 ? Math.round((fontesUsed / fontesTotal) * 100) : 0;
@@ -36,7 +40,7 @@ export function Sidebar({
   let lastSection: string | null = null;
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar${open ? " sidebar-open" : ""}`}>
       <div className="sidebar-logo">
         <div className="sidebar-logo-mark">
           <svg
@@ -54,6 +58,9 @@ export function Sidebar({
           Super Buscador
           <span>Workspace</span>
         </div>
+        <button className="sidebar-close-btn" onClick={onClose} aria-label="Fechar menu">
+          <X size={16} />
+        </button>
       </div>
 
       <nav className="sidebar-nav">
@@ -68,7 +75,7 @@ export function Sidebar({
           return (
             <div key={item.href}>
               {showSection && <div className="sidebar-section-title">{item.section}</div>}
-              <Link href={item.href} className={`sidebar-item ${isActive ? "active" : ""}`}>
+              <Link href={item.href} className={`sidebar-item ${isActive ? "active" : ""}`} onClick={onClose}>
                 <Icon />
                 {item.label}
                 {showBadge && <span className="sidebar-badge-danger">!</span>}

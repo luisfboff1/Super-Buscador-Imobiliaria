@@ -271,7 +271,7 @@ export default function BuscadorPage() {
         {/* Search form */}
         <div className="card" style={{ marginBottom: "20px" }}>
           <form onSubmit={handleBuscar}>
-            <div style={{ display: "flex", gap: "10px", marginBottom: showFiltros ? "20px" : "0" }}>
+            <div className="search-bar-row" style={{ marginBottom: showFiltros ? "20px" : "0" }}>
               <div style={{ flex: 1, position: "relative" }}>
                 <Search
                   size={15}
@@ -309,7 +309,7 @@ export default function BuscadorPage() {
             {/* Filtros avançados */}
             {showFiltros && (
               <div style={{ borderTop: "1px solid var(--border)", paddingTop: "16px" }}>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "12px" }}>
+              <div className="filter-grid">
                   <div>
                     <label className="form-label" style={{ marginBottom: "4px" }}>
                       Transação
@@ -363,7 +363,7 @@ export default function BuscadorPage() {
                     />
                   </div>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "12px", marginTop: "12px" }}>
+                <div className="filter-grid" style={{ marginTop: "12px" }}>
                   <div>
                     <label className="form-label" style={{ marginBottom: "4px" }}>
                       Bairro
@@ -400,7 +400,7 @@ export default function BuscadorPage() {
                     />
                   </div>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "12px", marginTop: "12px" }}>
+                <div className="filter-grid" style={{ marginTop: "12px" }}>
                   <div>
                     <label className="form-label" style={{ marginBottom: "4px" }}>
                       Quartos mín.
@@ -498,7 +498,7 @@ export default function BuscadorPage() {
               </select>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "14px" }}>
+            <div className="grid-3">
               {resultado.map((imovel) => (
                 <ImovelCard
                   key={imovel.id}

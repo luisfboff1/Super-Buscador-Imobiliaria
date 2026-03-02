@@ -48,9 +48,9 @@ export default function SignUpPage() {
   }
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", minHeight: "100vh", width: "100%" }}>
+    <div className="auth-split">
       {/* Left panel */}
-      <div style={{ background: "linear-gradient(155deg,#0b1a3e 0%,#0d2260 45%,#1a3a7a 100%)", display: "flex", flexDirection: "column", justifyContent: "space-between", padding: "48px", position: "relative", overflow: "hidden" }}>
+      <div className="auth-panel-left">
         <div style={{ position: "absolute", top: "-80px", right: "-80px", width: "320px", height: "320px", background: "radial-gradient(circle,rgba(59,130,246,0.25),transparent 70%)", borderRadius: "50%" }} />
 
         <div style={{ display: "flex", alignItems: "center", gap: "10px", position: "relative", zIndex: 1 }}>
@@ -78,8 +78,17 @@ export default function SignUpPage() {
       </div>
 
       {/* Right panel */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "48px 24px", background: "#f8fafc" }}>
+      <div className="auth-panel-right">
         <div style={{ width: "100%", maxWidth: "400px" }}>
+          {/* Mobile logo (hidden on desktop) */}
+          <div className="auth-mobile-logo">
+            <div className="auth-mobile-logo-mark">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="white" strokeWidth={2} width={16} height={16}>
+                <circle cx="11" cy="11" r="8" /><path strokeLinecap="round" d="M21 21l-4.35-4.35" />
+              </svg>
+            </div>
+            <span className="auth-mobile-logo-text">Super Buscador</span>
+          </div>
           <h1 style={{ fontSize: "22px", fontWeight: 700, color: "#0f172a", marginBottom: "6px" }}>Criar conta grátis</h1>
           <p style={{ fontSize: "13.5px", color: "#64748b", marginBottom: "28px" }}>
             Já tem conta?{" "}
