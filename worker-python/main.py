@@ -61,6 +61,7 @@ crawl_history: list[dict] = []  # últimos 20 crawls
 
 class CrawlRequest(BaseModel):
     fonteId: str
+    resetCrawl: bool = False
 
 
 # ─── Auth middleware ──────────────────────────────────────────────────────────
@@ -140,7 +141,7 @@ async def crawl(body: CrawlRequest, request: Request):
     # Dispara em background thread
     thread = threading.Thread(
         target=_run_crawl_background,
-        args=(fonte_id,),
+        args=(fonte_id, body.resetCrawl),
         daemon=True,
     )
     thread.start()
@@ -150,7 +151,7 @@ async def crawl(body: CrawlRequest, request: Request):
 
 # ─── Background crawl execution ──────────────────────────────────────────────
 
-def _run_crawl_background(fonte_id: str) -> None:
+def _run_crawl_background(fonte_id: str, reset_crawl: bool = False) -> None:
     """Executa crawl em background thread com logging completo."""
     crawl_start = time.time()
     crawl_log: list[str] = []
@@ -199,6 +200,7 @@ def _run_crawl_background(fonte_id: str) -> None:
             estado=fonte.estado,
             on_progress=on_progress,
             site_config=fonte.config,
+            reset_crawl=reset_crawl,
         )
 
         # 5. Marcar como OK
@@ -215,6 +217,10 @@ def _run_crawl_background(fonte_id: str) -> None:
             "enriched": stats.enriched,
             "failed": stats.failed,
             "complete": stats.complete_count,
+            "new_urls": stats.new_urls_count,
+            "kept_urls": stats.kept_urls_count,
+            "sold_urls": stats.sold_urls_count,
+            "reactivated_urls": stats.reactivated_count,
             "elapsed_s": round(elapsed, 1),
             "finished_at": datetime.utcnow().isoformat(),
             "phase_times": stats.phase_times,

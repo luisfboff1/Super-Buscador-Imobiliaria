@@ -957,6 +957,24 @@ class SiteTemplate:
             f"hits={self.hits}, miss={self.misses}, llm={self.llm_calls})"
         )
 
+    def to_dict(self) -> dict:
+        """Serializa o template para persistência no banco de dados."""
+        return {
+            "confirmed": self.confirmed,
+            "llm_voted": {k: list(v) for k, v in self._llm_voted.items()},
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SiteTemplate":
+        """Restaura um template salvo do banco (pula a fase de aprendizado)."""
+        t = cls()
+        t.confirmed = data.get("confirmed", {})
+        t._llm_voted = {k: set(v) for k, v in data.get("llm_voted", {}).items()}
+        if t.confirmed:
+            t.is_ready = True
+            t._sample_count = cls.LEARN_PAGES
+        return t
+
 
 # ─── 4. Extração via LLM (Groq) — o "agente" que completa tudo ──────────────
 

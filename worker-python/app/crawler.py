@@ -1937,6 +1937,11 @@ class CrawlStats:
         self.template_misses = 0
         self.llm_calls_total = 0
         self.pagination_type = "desconhecido"  # url_param | js_click | path | nenhuma
+        # Incremental sync counters
+        self.new_urls_count = 0
+        self.kept_urls_count = 0
+        self.sold_urls_count = 0
+        self.reactivated_count = 0
 
     @property
     def elapsed_s(self) -> float:
@@ -1974,13 +1979,26 @@ def execute_crawl(
     estado: Optional[str],
     on_progress: Optional[Callable[[str], None]] = None,
     site_config: Optional[dict] = None,
+    reset_crawl: bool = False,
 ) -> CrawlStats:
     """
     Executa crawl completo de uma fonte.
-    
+
+    Se reset_crawl=False (padrão) faz sync incremental: só enriquece URLs novas,
+    marca como 'possivelmente_vendido' as que sumiram.
+    Se reset_crawl=True re-enriquece tudo do zero.
+
     Retorna CrawlStats com métricas.
     """
-    from app.db import upsert_imoveis, mark_imoveis_indisponiveis, update_crawl_progress
+    from app.db import (
+        upsert_imoveis,
+        mark_imoveis_indisponiveis,
+        update_crawl_progress,
+        get_existing_imovel_urls,
+        sync_imovel_status,
+        save_fonte_config,
+    )
+    from app.extractor import SiteTemplate as _SiteTemplate  # alias p/ evitar conflito de escopo
 
     progress = on_progress or log.info
     stats = CrawlStats()
@@ -2022,12 +2040,40 @@ def execute_crawl(
         _push_progress("concluido", "Nenhum imóvel encontrado", 0, 0, finished=True)
         return stats
 
+    # ── FASE 1b: Sync incremental ─────────────────────────────────
+    if not reset_crawl:
+        progress(f"\n{'─'*50}")
+        progress("FASE 1b: Sync incremental — calculando delta")
+        existing_urls = get_existing_imovel_urls(fonte_id)
+        all_urls_set = set(urls)
+        new_urls = [u for u in urls if u not in existing_urls]
+        kept_urls = [u for u in urls if u in existing_urls]
+        stats.new_urls_count = len(new_urls)
+        stats.kept_urls_count = len(kept_urls)
+        stats.sold_urls_count = len(existing_urls - all_urls_set)
+        progress(f"  +{stats.new_urls_count} novas  ={stats.kept_urls_count} mantidas  -{stats.sold_urls_count} possivelmente vendidas")
+        urls_to_enrich_all = new_urls  # só enriquecer novas
+    else:
+        progress("Reset crawl ativo — re-enriquecendo tudo")
+        urls_to_enrich_all = urls
+        stats.new_urls_count = len(urls)
+
     # ── FASE 2: Enriquecimento (só salva quem tem dados) ──────────
-    urls_to_enrich = urls[:MAX_ENRICH] if MAX_ENRICH > 0 else urls
+    urls_to_enrich = urls_to_enrich_all[:MAX_ENRICH] if MAX_ENRICH > 0 else urls_to_enrich_all
     total = len(urls_to_enrich)
 
     # Template de CSS selectors (aprende nas primeiras 5, usa no resto)
-    template = SiteTemplate()
+    # Tentar restaurar template salvo no banco para pular fase de aprendizado
+    saved_template_data = site_config.get("css_template") if site_config else None
+    if saved_template_data:
+        try:
+            template = SiteTemplate.from_dict(saved_template_data)
+            progress(f"⚡ Template CSS carregado do banco ({len(template.confirmed)} selectors) — pulando aprendizado")
+        except Exception as _e:
+            log.warning(f"Falha ao restaurar template: {_e} — usando novo")
+            template = SiteTemplate()
+    else:
+        template = SiteTemplate()
 
     # Tracking de qualidade
     complete_items: list[str] = []    # preço + tipo + localização
@@ -2040,7 +2086,7 @@ def execute_crawl(
 
     progress(f"\n{'─'*50}")
     if MAX_ENRICH > 0:
-        progress(f"FASE 2: Enriquecimento (limitado: {total}/{len(urls)})")
+        progress(f"FASE 2: Enriquecimento (limitado: {total}/{len(urls_to_enrich_all)})")
     else:
         progress(f"FASE 2: Enriquecimento ({total} imóveis)")
     progress(f"Workers paralelos: {CONCURRENCY}")
@@ -2142,16 +2188,23 @@ def execute_crawl(
 
     stats.phase_times["enriquecimento_s"] = round(time.time() - _t_enrichment, 1)
 
-    # ── FASE 3: Marcar indisponíveis ──────────────────
+    # ── FASE 3: Sync de status ────────────────────────
     progress(f"\n{'─'*50}")
-    progress(f"FASE 3: Marcando imóveis indisponíveis")
+    progress(f"FASE 3: Sincronizando status dos imóveis")
     progress(f"{'─'*50}")
 
-    _push_progress("finalizando", "Finalizando e marcando indisponíveis...", total, total, recent_logs)
+    _push_progress("finalizando", "Finalizando e sincronizando status...", total, total, recent_logs)
 
     _t_finalizacao = time.time()
-    disabled = mark_imoveis_indisponiveis(fonte_id, urls)
-    progress(f"✓ {disabled} imóveis marcados como indisponíveis")
+    if not reset_crawl:
+        reactivated, sold = sync_imovel_status(fonte_id, set(urls))
+        stats.sold_urls_count = sold
+        stats.reactivated_count = reactivated
+        progress(f"✓ {sold} possivelmente vendidos  |  {reactivated} reativados")
+    else:
+        # Reset: usar método clássico (marca indisponíveis todos que sumiram)
+        disabled = mark_imoveis_indisponiveis(fonte_id, urls)
+        progress(f"✓ {disabled} imóveis marcados como indisponíveis (reset)")
     stats.phase_times["finalizacao_s"] = round(time.time() - _t_finalizacao, 1)
 
     # ── RELATÓRIO FINAL ───────────────────────────────
@@ -2208,6 +2261,21 @@ def execute_crawl(
     stats.template_hits = template.hits
     stats.template_misses = template.misses
     stats.llm_calls_total = template.llm_calls
+
+    # ── Persistir template CSS no banco ──────────────
+    if template.is_ready and template.confirmed:
+        try:
+            save_fonte_config(fonte_id, {"css_template": template.to_dict()})
+            progress(f"💾 Template CSS salvo no banco ({len(template.confirmed)} selectors)")
+        except Exception as _e:
+            log.warning(f"Falha ao salvar template: {_e}")
+    elif not template.is_ready and saved_template_data:
+        # Template salvo ficou inválido nesta run → limpar
+        try:
+            save_fonte_config(fonte_id, {"css_template": None})
+            progress("🗑 Template CSS inválido removido do banco")
+        except Exception as _e:
+            log.warning(f"Falha ao limpar template: {_e}")
 
     # Progresso final para o frontend
     _push_progress(

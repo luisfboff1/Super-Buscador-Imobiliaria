@@ -216,11 +216,11 @@ def upsert_imoveis(fonte_id: str, items: list[ImovelInput]) -> int:
                         INSERT INTO imoveis (
                             fonte_id, url_anuncio, titulo, tipo, transacao, cidade, bairro, estado,
                             preco, area_m2, quartos, banheiros, vagas,
-                            descricao, imagens, caracteristicas, disponivel, updated_at
+                            descricao, imagens, caracteristicas, disponivel, status, updated_at
                         ) VALUES (
                             %s, %s, %s, %s, %s, %s, %s, %s,
                             %s, %s, %s, %s, %s,
-                            %s, %s, %s::jsonb, true, NOW()
+                            %s, %s, %s::jsonb, true, 'ativo', NOW()
                         )
                         ON CONFLICT (url_anuncio) DO UPDATE SET
                             titulo = COALESCE(EXCLUDED.titulo, imoveis.titulo),
@@ -238,6 +238,7 @@ def upsert_imoveis(fonte_id: str, items: list[ImovelInput]) -> int:
                             imagens = CASE WHEN EXCLUDED.imagens IS NOT NULL AND array_length(EXCLUDED.imagens, 1) > 0 THEN EXCLUDED.imagens ELSE imoveis.imagens END,
                             caracteristicas = COALESCE(EXCLUDED.caracteristicas, imoveis.caracteristicas),
                             disponivel = true,
+                            status = 'ativo',
                             updated_at = NOW()
                         """,
                         (
@@ -298,6 +299,69 @@ def update_crawl_progress(fonte_id: str, progress_data: dict) -> None:
         cur.execute(
             "UPDATE fontes SET crawl_progress = %s::jsonb WHERE id = %s",
             (json.dumps(progress_data, ensure_ascii=False), fonte_id),
+        )
+
+
+def get_existing_imovel_urls(fonte_id: str) -> set[str]:
+    """Retorna conjunto de URLs de imóveis já existentes no banco para uma fonte."""
+    with cursor() as cur:
+        cur.execute(
+            "SELECT url_anuncio FROM imoveis WHERE fonte_id = %s",
+            (fonte_id,),
+        )
+        return {row["url_anuncio"] for row in cur.fetchall()}
+
+
+def sync_imovel_status(fonte_id: str, current_urls: set[str]) -> tuple[int, int]:
+    """
+    Sync incremental de status:
+    - URLs em current_urls → status='ativo', disponivel=true
+    - URLs que sumiram    → status='possivelmente_vendido', disponivel=false
+    Retorna (reativados, possivelmente_vendidos).
+    """
+    with cursor() as cur:
+        cur.execute(
+            "SELECT url_anuncio FROM imoveis WHERE fonte_id = %s",
+            (fonte_id,),
+        )
+        all_in_db = {row["url_anuncio"] for row in cur.fetchall()}
+
+    gone_urls = list(all_in_db - current_urls)
+    came_back_urls = list(current_urls & all_in_db)  # existed before AND still active
+
+    sold_count = 0
+    reactivated_count = 0
+
+    if gone_urls:
+        with cursor() as cur:
+            cur.execute(
+                "UPDATE imoveis SET status = 'possivelmente_vendido', disponivel = false, updated_at = NOW() "
+                "WHERE fonte_id = %s AND url_anuncio = ANY(%s)",
+                (fonte_id, gone_urls),
+            )
+            sold_count = cur.rowcount
+        log.info(f"Marcados {sold_count} como possivelmente_vendido")
+
+    if came_back_urls:
+        with cursor() as cur:
+            cur.execute(
+                "UPDATE imoveis SET status = 'ativo', disponivel = true, updated_at = NOW() "
+                "WHERE fonte_id = %s AND url_anuncio = ANY(%s) AND status != 'ativo'",
+                (fonte_id, came_back_urls),
+            )
+            reactivated_count = cur.rowcount
+        if reactivated_count > 0:
+            log.info(f"Reativados {reactivated_count} imóveis (voltaram ao ar)")
+
+    return reactivated_count, sold_count
+
+
+def save_fonte_config(fonte_id: str, config_update: dict) -> None:
+    """Merge-atualiza o campo config JSONB da fonte com os dados fornecidos."""
+    with cursor() as cur:
+        cur.execute(
+            "UPDATE fontes SET config = COALESCE(config, '{}'::jsonb) || %s::jsonb WHERE id = %s",
+            (json.dumps(config_update, ensure_ascii=False), fonte_id),
         )
 
 

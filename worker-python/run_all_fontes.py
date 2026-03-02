@@ -142,12 +142,14 @@ def main():
     print()
 
     # Header
-    print(f"{'Fonte':<25} {'URLs':>6} {'Enriq':>6} {'Falhas':>7} {'Tempo':>10} {'Status':<15}")
-    print(f"{'─' * 25} {'─' * 6} {'─' * 6} {'─' * 7} {'─' * 10} {'─' * 15}")
+    print(f"{'Fonte':<25} {'URLs':>6} {'Novos':>6} {'Vendidos':>9} {'Enriq':>6} {'Falhas':>7} {'Tempo':>10} {'Status':<15}")
+    print(f"{'─' * 25} {'─' * 6} {'─' * 6} {'─' * 9} {'─' * 6} {'─' * 7} {'─' * 10} {'─' * 15}")
 
     total_urls = 0
     total_enriched = 0
     total_failed = 0
+    total_new = 0
+    total_sold = 0
     success_count = 0
 
     for r in all_results:
@@ -157,10 +159,16 @@ def main():
         failed = r.get("failed", 0)
         elapsed = r.get("elapsed_s", 0)
         status = r.get("status", "?")
+        new_urls = r.get("new_urls", "-")
+        sold_urls = r.get("sold_urls", "-")
 
         total_urls += urls
         total_enriched += enriched
         total_failed += failed
+        if isinstance(new_urls, int):
+            total_new += new_urls
+        if isinstance(sold_urls, int):
+            total_sold += sold_urls
         if status == "ok":
             success_count += 1
 
@@ -172,15 +180,17 @@ def main():
         else:
             time_str = f"{elapsed:.0f}s"
 
-        print(f"{nome:<25} {urls:>6} {enriched:>6} {failed:>7} {time_str:>10} {status:<15}")
+        print(f"{nome:<25} {urls:>6} {str(new_urls):>6} {str(sold_urls):>9} {enriched:>6} {failed:>7} {time_str:>10} {status:<15}")
 
-    print(f"{'─' * 25} {'─' * 6} {'─' * 6} {'─' * 7} {'─' * 10} {'─' * 15}")
+    print(f"{'─' * 25} {'─' * 6} {'─' * 6} {'─' * 9} {'─' * 6} {'─' * 7} {'─' * 10} {'─' * 15}")
     total_time_str = f"{total_elapsed/60:.1f}min" if total_elapsed < 3600 else f"{total_elapsed/3600:.1f}h"
-    print(f"{'TOTAL':<25} {total_urls:>6} {total_enriched:>6} {total_failed:>7} {total_time_str:>10} {success_count}/{len(FONTES)} ok")
+    print(f"{'TOTAL':<25} {total_urls:>6} {total_new:>6} {total_sold:>9} {total_enriched:>6} {total_failed:>7} {total_time_str:>10} {success_count}/{len(FONTES)} ok")
 
     print(f"\n{'=' * 70}")
     print(f"  MÉTRICAS GERAIS:")
     print(f"    Total URLs descobertas:   {total_urls}")
+    print(f"    Novas (para enriquecer):  {total_new}")
+    print(f"    Possivelmente vendidos:   {total_sold}")
     print(f"    Total enriquecidos:       {total_enriched}")
     print(f"    Total falhas:             {total_failed}")
     print(f"    Taxa de sucesso:          {(total_enriched/(total_urls or 1))*100:.1f}%")
