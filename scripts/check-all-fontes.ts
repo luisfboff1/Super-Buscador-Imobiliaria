@@ -195,7 +195,7 @@ async function main() {
 
   const results: any[] = [];
 
-  for (const f of fontes.rows as FonteRow[]) {
+  for (const f of fontes.rows as unknown as FonteRow[]) {
     const stats = await getImoveisStats(f.id);
     const samples = await getSamples(f.id);
     const prog = f.crawl_progress as any;
