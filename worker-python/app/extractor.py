@@ -55,21 +55,27 @@ def _get_openai() -> Optional[OpenAI]:
 
 def _llm_chat(
     messages: list[dict],
+    max_tokens: int = 600,
+    reasoning_effort: str = "minimal",
 ) -> Optional[str]:
     """
     Chama LLM com fallback automático: OpenAI (rápido, confiável) → Groq.
-    Sem limite de tokens — modelo decide quanto usar.
+    max_tokens: teto de completion tokens (padrão 600 — suficiente para JSON de imóvel).
+    reasoning_effort: "minimal" = menor esforço de raciocínio do gpt-5-nano (valores: minimal/low/medium/high).
     Retorna o texto da resposta ou None.
     """
     # 1. Tentar OpenAI (confiável, sem truncamento)
     openai_client = _get_openai()
     if openai_client is not None:
         try:
-            # gpt-5-nano é reasoning: não aceita temperature.
-            # Sem max_completion_tokens → modelo decide quanto raciocinar e quantos tokens produzir.
+            # gpt-5-nano é reasoning: reasoning_effort="minimal" usa mínimo de thinking tokens.
+            # Valores suportados: minimal, low, medium, high ("none" não existe nesse modelo).
+            # max_completion_tokens evita gastos inesperados.
             response = openai_client.chat.completions.create(
                 model="gpt-5-nano",
                 messages=messages,
+                reasoning_effort=reasoning_effort,
+                max_completion_tokens=max_tokens,
             )
             text = response.choices[0].message.content or ""
             usage = response.usage
@@ -139,7 +145,8 @@ def _llm_locate_from_titulo(titulo: str, url: str) -> Optional[ImovelInput]:
         },
         {"role": "user", "content": f"Título: {titulo[:300]}"},
     ]
-    raw = _llm_chat(messages)
+    # Resposta curtíssima: apenas {"bairro": "...", "cidade": "..."}
+    raw = _llm_chat(messages, max_tokens=150)
     if not raw:
         return None
     try:

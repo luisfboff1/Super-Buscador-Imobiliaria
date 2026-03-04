@@ -928,6 +928,22 @@ const ImovelSchema = z.object({
   ),
 });
 
+// ─── Strip de atributos prolixos antes de mandar card ao LLM ────────────────
+// Mantém apenas atributos semânticos; reduz cada card de ~2-3k para ~500 chars.
+function stripCardParaLLM(cardHtml: string): string {
+  const KEEP_ATTRS = new Set(["href", "src", "data-src", "data-price", "data-area", "data-id", "alt"]);
+  const $ = cheerio.load(cardHtml, { xmlMode: false });
+  $("*").each((_, el) => {
+    if (!("attribs" in el)) return;
+    const attrs = Object.keys(el.attribs);
+    for (const attr of attrs) {
+      if (!KEEP_ATTRS.has(attr)) $(el).removeAttr(attr);
+    }
+  });
+  $("svg, noscript, iframe, picture source").remove();
+  return $.html().slice(0, 1_200); // teto seguro após strip
+}
+
 // ─── LLM com batches de cards ────────────────────────────────────────────────
 
 async function parseLLMComCards(cards: string[], baseUrl: string): Promise<ImovelInput[]> {
@@ -937,7 +953,7 @@ async function parseLLMComCards(cards: string[], baseUrl: string): Promise<Imove
   for (let i = 0; i < cards.length; i += BATCH) {
     const batch = cards.slice(i, i + BATCH);
     const cardsHtml = batch
-      .map((c, idx) => `<!-- CARD ${i + idx + 1} -->\n${c}`)
+      .map((c, idx) => `<!-- CARD ${i + idx + 1} -->\n${stripCardParaLLM(c)}`)
       .join("\n\n");
 
     try {
@@ -993,7 +1009,7 @@ ${cardsHtml}`,
 
 // ─── LLM com página completa ─────────────────────────────────────────────────
 
-const CHUNK_SIZE = 32_000;
+const CHUNK_SIZE = 16_000; // reduzido de 32k — qualidade equivalente com metade dos tokens
 
 function normalizarHtmlParaLLM(html: string): string {
   const $ = cheerio.load(html);
