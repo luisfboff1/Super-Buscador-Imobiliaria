@@ -31,6 +31,7 @@ export function ClientLayout({ children, ...sidebarProps }: ClientLayoutProps) {
         className="mobile-menu-btn"
         onClick={() => setSidebarOpen((v) => !v)}
         aria-label="Abrir menu"
+        style={sidebarOpen ? { display: "none" } : undefined}
       >
         <Menu size={18} />
       </button>
