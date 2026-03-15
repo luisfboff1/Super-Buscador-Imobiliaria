@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { getFonteById, updateFonteStatus } from "@/lib/db/queries";
+import { db } from "@/lib/db";
+import { eq } from "drizzle-orm";
+import * as tenantSchema from "@/lib/db/schema/tenant";
 
 const CRAWLER_WORKER_URL = process.env.CRAWLER_WORKER_URL;
 const WORKER_SECRET = process.env.WORKER_SECRET;
@@ -30,6 +33,27 @@ export async function POST(
 
   // Dispara crawl no worker (Railway) — retorna imediatamente
   try {
+    // Escrever heartbeat inicial ANTES de chamar o worker
+    // Garante que há heartbeatAt mesmo se o worker crashar imediatamente
+    await db
+      .update(tenantSchema.fontes)
+      .set({
+        crawlProgress: {
+          fase: "descoberta",
+          message: "Iniciando sincronização...",
+          done: 0,
+          total: 0,
+          pct: 0,
+          enriched: 0,
+          failed: 0,
+          elapsed: "0s",
+          logs: [],
+          finished: false,
+          heartbeatAt: new Date().toISOString(),
+        },
+      })
+      .where(eq(tenantSchema.fontes.id, id));
+
     const workerRes = await fetch(`${CRAWLER_WORKER_URL}/crawl`, {
       method: "POST",
       headers: {

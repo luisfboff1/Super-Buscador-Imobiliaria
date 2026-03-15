@@ -14,8 +14,10 @@ import { serve } from "@hono/node-server";
 import {
   getFonteById,
   updateFonteStatus,
+  updateCrawlProgress,
   upsertImoveis,
   markImoveisIndisponiveis,
+  type CrawlProgress,
 } from "./db.js";
 import {
   discoverPropertyUrls,
@@ -67,11 +69,42 @@ app.post("/crawl", async (c) => {
 
 // ─── Crawl execution (background) ────────────────────────────────────────────
 
+function formatElapsed(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${s % 60}s`;
+}
+
 async function executeCrawl(fonteId: string) {
   const startTime = Date.now();
   console.log(`\n${"=".repeat(60)}`);
   console.log(`[worker] INICIANDO CRAWL — fonte: ${fonteId}`);
   console.log(`${"=".repeat(60)}\n`);
+
+  // Logs recentes (últimos 5) para o frontend
+  const recentLogs: string[] = [];
+  function addLog(msg: string) {
+    recentLogs.push(msg);
+    if (recentLogs.length > 5) recentLogs.shift();
+  }
+
+  function makeProgress(overrides: Partial<CrawlProgress>): CrawlProgress {
+    return {
+      fase: "descoberta",
+      message: "",
+      done: 0,
+      total: 0,
+      pct: 0,
+      enriched: 0,
+      failed: 0,
+      elapsed: formatElapsed(Date.now() - startTime),
+      logs: [...recentLogs],
+      finished: false,
+      heartbeatAt: new Date().toISOString(),
+      ...overrides,
+    };
+  }
 
   try {
     // 1. Buscar fonte no DB
@@ -84,14 +117,19 @@ async function executeCrawl(fonteId: string) {
     console.log(`[worker] fonte: ${fonte.nome} — ${fonte.url}`);
     console.log(`[worker] cidade: ${fonte.cidade}, estado: ${fonte.estado}`);
 
-    // 2. Marcar como crawling
+    // 2. Marcar como crawling + progresso inicial
     await updateFonteStatus(fonteId, "crawling");
+    await updateCrawlProgress(fonteId, makeProgress({
+      fase: "descoberta",
+      message: "Descobrindo imóveis no site...",
+    }));
 
     // 3. Descobrir URLs de imóveis (paginação completa)
     console.log(`\n[worker] ── FASE 1: Descoberta de URLs ──\n`);
-    const urls = await discoverPropertyUrls(fonte.url, (msg) =>
-      console.log(msg)
-    );
+    const urls = await discoverPropertyUrls(fonte.url, (msg) => {
+      console.log(msg);
+      addLog(msg);
+    });
 
     if (urls.length === 0) {
       console.log(`[worker] nenhum imóvel encontrado, finalizando`);
@@ -104,6 +142,13 @@ async function executeCrawl(fonteId: string) {
 
     // 4. Salvar URLs base no DB (progresso parcial — nunca perde)
     console.log(`[worker] ── FASE 2: Salvando URLs base ──\n`);
+    addLog(`${urls.length} imóveis encontrados`);
+    await updateCrawlProgress(fonteId, makeProgress({
+      fase: "enriquecimento",
+      message: `Salvando ${urls.length} URLs...`,
+      total: urls.length,
+    }));
+
     await upsertImoveis(
       fonteId,
       urls.map((url) => ({
@@ -126,6 +171,12 @@ async function executeCrawl(fonteId: string) {
     let failed = 0;
     // CONCURRENCY: quantas páginas abrir em paralelo (ajustável via env)
     const CONCURRENCY = parseInt(process.env.CRAWL_CONCURRENCY || "3", 10);
+
+    await updateCrawlProgress(fonteId, makeProgress({
+      fase: "enriquecimento",
+      message: `Extraindo dados dos imóveis... (0/${urlsToEnrich.length})`,
+      total: urlsToEnrich.length,
+    }));
 
     for (let i = 0; i < urlsToEnrich.length; i += CONCURRENCY) {
       const batch = urlsToEnrich.slice(i, i + CONCURRENCY);
@@ -163,16 +214,54 @@ async function executeCrawl(fonteId: string) {
         );
       }
 
-      // sem delay — Railway processa à velocidade natural das páginas
+      // Atualizar progresso no DB após cada batch (heartbeat)
+      const done = i + batch.length;
+      const pct = Math.round((done / urlsToEnrich.length) * 100);
+      for (const r of results) {
+        const label = r.data?.titulo || r.data?.tipo || r.url.split("/").pop();
+        const price = r.data?.preco ? `R$${r.data.preco}` : "s/preço";
+        const city = r.data?.cidade || fonte.cidade || "";
+        const prefix = r.data ? "✓" : "✗";
+        addLog(`${prefix} ${label} — ${price} — ${city}`);
+      }
+
+      await updateCrawlProgress(fonteId, makeProgress({
+        fase: "enriquecimento",
+        message: `Extraindo dados dos imóveis... (${done}/${urlsToEnrich.length})`,
+        done,
+        total: urlsToEnrich.length,
+        pct,
+        enriched,
+        failed,
+      }));
     }
 
     // 6. Marcar imóveis antigos como indisponíveis
     console.log(`\n[worker] ── FASE 4: Marcando indisponíveis ──\n`);
+    await updateCrawlProgress(fonteId, makeProgress({
+      fase: "finalizando",
+      message: "Finalizando...",
+      done: urlsToEnrich.length,
+      total: urlsToEnrich.length,
+      pct: 100,
+      enriched,
+      failed,
+    }));
     await markImoveisIndisponiveis(fonteId, urls);
 
     // 7. Finalizar
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     await updateFonteStatus(fonteId, "ok");
+    await updateCrawlProgress(fonteId, makeProgress({
+      fase: "concluido",
+      message: `Concluído — ${enriched} extraídos, ${failed} erros`,
+      done: urlsToEnrich.length,
+      total: urlsToEnrich.length,
+      pct: 100,
+      enriched,
+      failed,
+      finished: true,
+    }));
     await closeBrowser();
 
     console.log(`\n${"=".repeat(60)}`);

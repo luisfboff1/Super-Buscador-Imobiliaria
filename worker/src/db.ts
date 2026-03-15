@@ -24,6 +24,7 @@ export const fontes = pgTable("fontes", {
   ativa: boolean("ativa").default(true),
   lastCrawl: timestamp("last_crawl"),
   crawlErro: text("crawl_erro"),
+  crawlProgress: jsonb("crawl_progress"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -74,17 +75,61 @@ export async function getFonteById(id: string) {
   return fonte ?? null;
 }
 
+export type CrawlProgress = {
+  fase: string;
+  message: string;
+  done: number;
+  total: number;
+  pct: number;
+  enriched: number;
+  failed: number;
+  elapsed: string;
+  logs: string[];
+  finished: boolean;
+  heartbeatAt: string;
+};
+
 export async function updateFonteStatus(
   id: string,
   status: string,
   erro?: string
 ) {
+  const now = new Date().toISOString();
+  const finishedProgress = {
+    fase: status === "ok" ? "concluido" : "erro",
+    message: erro || (status === "ok" ? "Concluído" : "Erro"),
+    done: 0,
+    total: 0,
+    pct: 100,
+    enriched: 0,
+    failed: 0,
+    elapsed: "",
+    logs: [],
+    finished: true,
+    heartbeatAt: now,
+  };
+
   await db
     .update(fontes)
     .set({
       status,
       crawlErro: erro ?? null,
       lastCrawl: status === "ok" ? new Date() : undefined,
+      ...(status === "ok" || status === "erro"
+        ? { crawlProgress: sql`${JSON.stringify(finishedProgress)}::jsonb` }
+        : {}),
+    })
+    .where(eq(fontes.id, id));
+}
+
+export async function updateCrawlProgress(
+  id: string,
+  progress: CrawlProgress
+) {
+  await db
+    .update(fontes)
+    .set({
+      crawlProgress: sql`${JSON.stringify(progress)}::jsonb`,
     })
     .where(eq(fontes.id, id));
 }

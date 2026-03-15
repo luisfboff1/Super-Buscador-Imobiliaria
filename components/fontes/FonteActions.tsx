@@ -38,9 +38,10 @@ export function FonteActions({ fonteId, status }: FonteActionsProps) {
   const pollStartRef = useRef<number | null>(null);
   const lastProgressRef = useRef<{ done: number; ts: number } | null>(null);
 
-  // Máximo: 25 min polling; sem progresso por 8 min = travado
-  const POLL_MAX_MS = 25 * 60 * 1000;
-  const STALL_MS = 8 * 60 * 1000;
+  // Máximo: 60 min polling (crawls longos são legítimos com heartbeat ativo)
+  // Sem progresso por 2 min = backup de segurança (servidor detecta em ~90s)
+  const POLL_MAX_MS = 60 * 60 * 1000;
+  const STALL_MS = 2 * 60 * 1000;
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
