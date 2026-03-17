@@ -19,6 +19,7 @@ import asyncio
 import time
 import threading
 import traceback
+from datetime import datetime
 from typing import Optional, Callable
 from urllib.parse import urljoin, urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -2017,6 +2018,7 @@ def execute_crawl(
                 "elapsed": stats.elapsed_str,
                 "logs": (logs or [])[-8:],  # últimas 8 entradas
                 "finished": finished,
+                "heartbeatAt": datetime.utcnow().isoformat(),
             })
         except Exception as e:
             log.warning(f"Falha ao salvar progresso: {e}")

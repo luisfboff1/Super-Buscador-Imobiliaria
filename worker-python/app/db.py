@@ -7,6 +7,7 @@ Mesmo banco, mesmas tabelas, queries compatíveis.
 
 import os
 import json
+from datetime import datetime
 from typing import Optional
 from contextlib import contextmanager
 
@@ -280,6 +281,7 @@ def reset_stuck_crawling_fontes() -> int:
         "enriched": 0, "failed": 0,
         "elapsed": "0s", "logs": [],
         "finished": True,
+        "heartbeatAt": datetime.utcnow().isoformat(),
     }, ensure_ascii=False)
     with cursor() as cur:
         cur.execute(

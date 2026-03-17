@@ -66,6 +66,15 @@ export async function POST(
     if (!workerRes.ok) {
       const errorBody = await workerRes.text();
       console.error(`[crawl] worker respondeu ${workerRes.status}: ${errorBody}`);
+
+      // 409 = crawl já em andamento no worker
+      if (workerRes.status === 409) {
+        return NextResponse.json(
+          { error: "Já existe uma sincronização em andamento para esta fonte. Aguarde a conclusão." },
+          { status: 409 }
+        );
+      }
+
       return NextResponse.json(
         { error: `Worker erro: ${workerRes.status}` },
         { status: 502 }

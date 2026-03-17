@@ -55,6 +55,7 @@ WORKER_SECRET = os.environ.get("WORKER_SECRET", "")
 # ─── Estado de crawls ativos ─────────────────────────────────────────────────
 
 MAX_CONCURRENT_CRAWLS = 1  # Limite global (Playwright usa muita RAM)
+STALE_CRAWL_TIMEOUT_S = 30 * 60  # 30 min — auto-evict crawl travado
 active_crawls: dict[str, dict] = {}
 crawl_history: list[dict] = []  # últimos 20 crawls
 
@@ -78,6 +79,21 @@ def check_auth(request: Request) -> None:
 
 
 # ─── Endpoints ────────────────────────────────────────────────────────────────
+
+def _evict_stale_crawls() -> list[str]:
+    """Remove crawls que passaram do timeout. Retorna IDs removidos."""
+    stale_ids = []
+    for fid, info in list(active_crawls.items()):
+        try:
+            age_s = (datetime.utcnow() - datetime.fromisoformat(info.get("started_at", ""))).total_seconds()
+        except (ValueError, TypeError):
+            age_s = STALE_CRAWL_TIMEOUT_S + 1
+        if age_s > STALE_CRAWL_TIMEOUT_S:
+            stale_ids.append(fid)
+    for fid in stale_ids:
+        log.warning(f"⚠ Evictando crawl stale: {fid[:8]}...")
+        active_crawls.pop(fid, None)
+    return stale_ids
 
 @app.get("/health")
 async def health():
@@ -114,6 +130,9 @@ async def crawl(body: CrawlRequest, request: Request):
     if not fonte_id:
         raise HTTPException(status_code=400, detail="fonteId required")
 
+    # Limpa crawls stale globalmente antes de verificar
+    _evict_stale_crawls()
+
     # Verifica se já está rodando (mesma fonte)
     if fonte_id in active_crawls:
         return JSONResponse(
@@ -121,7 +140,7 @@ async def crawl(body: CrawlRequest, request: Request):
             content={
                 "error": "Crawl já em andamento para esta fonte",
                 "fonteId": fonte_id,
-                "startedAt": active_crawls[fonte_id]["started_at"],
+                "startedAt": active_crawls[fonte_id].get("started_at", ""),
             },
         )
 
@@ -264,6 +283,7 @@ def _run_crawl_background(fonte_id: str, reset_crawl: bool = False) -> None:
                 "elapsed": f"{elapsed:.1f}s",
                 "logs": [],
                 "finished": True,
+                "heartbeatAt": datetime.utcnow().isoformat(),
             })
         except Exception:
             pass
