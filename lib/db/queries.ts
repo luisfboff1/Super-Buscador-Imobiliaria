@@ -116,6 +116,7 @@ export type FiltrosImoveis = {
   precoMin?: number;
   precoMax?: number;
   areaMin?: number;
+  areaMax?: number;
   quartosMin?: number;
   vagasMin?: number;
   page?: number;
@@ -148,11 +149,13 @@ export async function searchImoveis(filtros: FiltrosImoveis = {}) {
   if (filtros.bairro)
     conditions.push(ilike(tenantSchema.imoveis.bairro, `%${filtros.bairro}%`));
   if (filtros.precoMin)
-    conditions.push(gte(tenantSchema.imoveis.preco, String(filtros.precoMin)));
+    conditions.push(sql`${tenantSchema.imoveis.preco}::numeric >= ${filtros.precoMin}`);
   if (filtros.precoMax)
-    conditions.push(lte(tenantSchema.imoveis.preco, String(filtros.precoMax)));
+    conditions.push(sql`${tenantSchema.imoveis.preco}::numeric <= ${filtros.precoMax}`);
   if (filtros.areaMin)
-    conditions.push(gte(tenantSchema.imoveis.areaM2, String(filtros.areaMin)));
+    conditions.push(sql`${tenantSchema.imoveis.areaM2}::numeric >= ${filtros.areaMin}`);
+  if (filtros.areaMax)
+    conditions.push(sql`${tenantSchema.imoveis.areaM2}::numeric <= ${filtros.areaMax}`);
   if (filtros.quartosMin)
     conditions.push(gte(tenantSchema.imoveis.quartos, filtros.quartosMin));
   if (filtros.vagasMin)

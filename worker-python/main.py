@@ -63,6 +63,7 @@ crawl_history: list[dict] = []  # últimos 20 crawls
 class CrawlRequest(BaseModel):
     fonteId: str
     resetCrawl: bool = False
+    force: bool = False
 
 
 # ─── Auth middleware ──────────────────────────────────────────────────────────
@@ -118,6 +119,16 @@ async def status():
     }
 
 
+@app.post("/clear-lock")
+async def clear_lock(request: Request):
+    """Limpa todos os locks de crawl (emergência)."""
+    check_auth(request)
+    cleared = list(active_crawls.keys())
+    active_crawls.clear()
+    log.warning(f"⚠ Locks limpos manualmente: {[fid[:8] for fid in cleared]}")
+    return {"cleared": cleared, "timestamp": datetime.utcnow().isoformat()}
+
+
 @app.post("/crawl")
 async def crawl(body: CrawlRequest, request: Request):
     """
@@ -132,6 +143,11 @@ async def crawl(body: CrawlRequest, request: Request):
 
     # Limpa crawls stale globalmente antes de verificar
     _evict_stale_crawls()
+
+    # force=true: limpa lock manualmente (usado pelo Vercel quando detecta stale)
+    if body.force and fonte_id in active_crawls:
+        log.warning(f"⚠ Force-clear do lock para {fonte_id[:8]}...")
+        active_crawls.pop(fonte_id, None)
 
     # Verifica se já está rodando (mesma fonte)
     if fonte_id in active_crawls:

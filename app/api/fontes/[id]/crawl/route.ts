@@ -54,26 +54,39 @@ export async function POST(
       })
       .where(eq(tenantSchema.fontes.id, id));
 
-    const workerRes = await fetch(`${CRAWLER_WORKER_URL}/crawl`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(WORKER_SECRET && { Authorization: `Bearer ${WORKER_SECRET}` }),
-      },
-      body: JSON.stringify({ fonteId: id }),
-    });
+    const callWorker = async (force = false) => {
+      return fetch(`${CRAWLER_WORKER_URL}/crawl`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(WORKER_SECRET && { Authorization: `Bearer ${WORKER_SECRET}` }),
+        },
+        body: JSON.stringify({ fonteId: id, force }),
+      });
+    };
+
+    let workerRes = await callWorker();
+
+    // Se 409 (lock preso), tenta limpar o lock e chamar novamente
+    if (workerRes.status === 409) {
+      console.warn(`[crawl] worker retornou 409 para fonte ${id} — limpando lock e retentando`);
+      // Tenta clear-lock (funciona mesmo no código antigo via force, e no novo via endpoint)
+      try {
+        await fetch(`${CRAWLER_WORKER_URL}/clear-lock`, {
+          method: "POST",
+          headers: {
+            ...(WORKER_SECRET && { Authorization: `Bearer ${WORKER_SECRET}` }),
+          },
+        });
+      } catch {
+        // Se não existe o endpoint, tenta com force
+      }
+      workerRes = await callWorker(true);
+    }
 
     if (!workerRes.ok) {
       const errorBody = await workerRes.text();
       console.error(`[crawl] worker respondeu ${workerRes.status}: ${errorBody}`);
-
-      // 409 = crawl já em andamento no worker
-      if (workerRes.status === 409) {
-        return NextResponse.json(
-          { error: "Já existe uma sincronização em andamento para esta fonte. Aguarde a conclusão." },
-          { status: 409 }
-        );
-      }
 
       return NextResponse.json(
         { error: `Worker erro: ${workerRes.status}` },

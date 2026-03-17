@@ -72,6 +72,7 @@ type Filtros = {
   quartos: string;
   vagas: string;
   areaMin: string;
+  areaMax: string;
 };
 
 function formatPreco(v: string | null) {
@@ -196,6 +197,7 @@ export default function BuscadorPage() {
     quartos: "",
     vagas: "",
     areaMin: "",
+    areaMax: "",
   });
   const [busca, setBusca] = useState("");
   const [buscando, setBuscando] = useState(false);
@@ -233,6 +235,7 @@ export default function BuscadorPage() {
       if (filtros.quartos) params.set("quartosMin", filtros.quartos);
       if (filtros.vagas) params.set("vagasMin", filtros.vagas);
       if (filtros.areaMin) params.set("areaMin", filtros.areaMin);
+      if (filtros.areaMax) params.set("areaMax", filtros.areaMax);
       if (busca) params.set("q", busca);
       params.set("page", String(targetPage));
 
@@ -381,10 +384,11 @@ export default function BuscadorPage() {
                     </label>
                     <input
                       className="form-input"
-                      type="number"
+                      type="text"
+                      inputMode="numeric"
                       placeholder="Ex: 100000"
                       value={filtros.precoMin}
-                      onChange={(e) => setFiltros({ ...filtros, precoMin: e.target.value })}
+                      onChange={(e) => setFiltros({ ...filtros, precoMin: e.target.value.replace(/[^\d.,]/g, "") })}
                     />
                   </div>
                   <div>
@@ -393,10 +397,11 @@ export default function BuscadorPage() {
                     </label>
                     <input
                       className="form-input"
-                      type="number"
+                      type="text"
+                      inputMode="numeric"
                       placeholder="Ex: 500000"
                       value={filtros.precoMax}
-                      onChange={(e) => setFiltros({ ...filtros, precoMax: e.target.value })}
+                      onChange={(e) => setFiltros({ ...filtros, precoMax: e.target.value.replace(/[^\d.,]/g, "") })}
                     />
                   </div>
                 </div>
@@ -438,10 +443,24 @@ export default function BuscadorPage() {
                     </label>
                     <input
                       className="form-input"
-                      type="number"
+                      type="text"
+                      inputMode="numeric"
                       placeholder="Ex: 60"
                       value={filtros.areaMin}
-                      onChange={(e) => setFiltros({ ...filtros, areaMin: e.target.value })}
+                      onChange={(e) => setFiltros({ ...filtros, areaMin: e.target.value.replace(/[^\d.,]/g, "") })}
+                    />
+                  </div>
+                  <div>
+                    <label className="form-label" style={{ marginBottom: "4px" }}>
+                      Área máx. (m²)
+                    </label>
+                    <input
+                      className="form-input"
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="Ex: 100000"
+                      value={filtros.areaMax}
+                      onChange={(e) => setFiltros({ ...filtros, areaMax: e.target.value.replace(/[^\d.,]/g, "") })}
                     />
                   </div>
                 </div>
