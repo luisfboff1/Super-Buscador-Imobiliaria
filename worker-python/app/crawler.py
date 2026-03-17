@@ -47,6 +47,13 @@ MAX_PAGES = int(os.environ.get("CRAWL_MAX_PAGES", "200"))
 MAX_ENRICH = int(os.environ.get("CRAWL_MAX_ENRICH", "0"))  # 0 = todos (sem limite)
 CONCURRENCY = int(os.environ.get("CRAWL_CONCURRENCY", "3"))  # paralelo (reduzido de 5→3 para evitar crash de Chromium por OOM)
 
+# Semáforo global: limita instâncias Playwright simultâneas (cada uma ~200MB RAM)
+MAX_STEALTH_CONCURRENT = int(os.environ.get("MAX_STEALTH_CONCURRENT", "2"))
+_stealth_semaphore = threading.Semaphore(MAX_STEALTH_CONCURRENT)
+
+# Limite de RAM para throttling (MB): acima disso, gc + reduz concurrency
+MEM_THROTTLE_MB = int(os.environ.get("MEM_THROTTLE_MB", "700"))
+
 # Cache por domínio: se as primeiras páginas SEMPRE precisaram de stealth, pular HTTP nas demais
 # {hostname: True=stealth obrigatório, False=HTTP funciona, None=ainda aprendendo}
 _domain_stealth: dict[str, bool] = {}
@@ -156,14 +163,19 @@ def fetch_page(url: str, stealth: bool = False) -> Optional[object]:
     try:
         if stealth:
             log.debug(f"Fetch stealth: {url}")
-            page = StealthyFetcher.fetch(
-                url,
-                headless=True,
-                network_idle=False,
-                timeout=30000,
-                wait=3000,
-                disable_resources=False,
-            )
+            _stealth_semaphore.acquire()
+            try:
+                page = StealthyFetcher.fetch(
+                    url,
+                    headless=True,
+                    network_idle=False,
+                    timeout=30000,
+                    wait=3000,
+                    disable_resources=False,
+                )
+            finally:
+                _stealth_semaphore.release()
+                gc.collect()
         else:
             log.debug(f"Fetch rápido: {url}")
             page = Fetcher.get(
@@ -247,15 +259,20 @@ def fetch_page_with_scroll(url: str, max_scrolls: int = 50,
     
     try:
         log.info(f"Fetch com scroll: {url}")
-        page = StealthyFetcher.fetch(
-            url,
-            headless=True,
-            network_idle=False,
-            timeout=120000,
-            wait=3000,
-            disable_resources=False,
-            page_action=_scroll_action,
-        )
+        _stealth_semaphore.acquire()
+        try:
+            page = StealthyFetcher.fetch(
+                url,
+                headless=True,
+                network_idle=False,
+                timeout=120000,
+                wait=3000,
+                disable_resources=False,
+                page_action=_scroll_action,
+            )
+        finally:
+            _stealth_semaphore.release()
+            gc.collect()
         return page
     except Exception as e:
         log.warning(f"Fetch com scroll falhou ({url}): {e}")
@@ -395,15 +412,20 @@ def fetch_page_with_js_pagination(
 
     try:
         log.info(f"Fetch com JS pagination: {url}")
-        StealthyFetcher.fetch(
-            url,
-            headless=True,
-            network_idle=True,    # precisa esperar AJAX da listagem carregar
-            timeout=180000,
-            wait=3000,            # buffer adicional após network idle
-            disable_resources=False,
-            page_action=_paginate_action,
-        )
+        _stealth_semaphore.acquire()
+        try:
+            StealthyFetcher.fetch(
+                url,
+                headless=True,
+                network_idle=True,    # precisa esperar AJAX da listagem carregar
+                timeout=180000,
+                wait=3000,            # buffer adicional após network idle
+                disable_resources=False,
+                page_action=_paginate_action,
+            )
+        finally:
+            _stealth_semaphore.release()
+            gc.collect()
         return collected_links
     except Exception as e:
         log.warning(f"Fetch com JS pagination falhou ({url}): {e}")
@@ -1599,6 +1621,11 @@ def discover_property_urls(
                 llm_pagination_hint["tipo"] = "query_param"
 
     progress(f"\n✓ Descoberta concluída: {len(all_detail_urls)} URLs")
+
+    # Free listing cache (page objects hold parsed DOMs - several MB each)
+    listing_cache.clear()
+    gc.collect()
+
     return list(all_detail_urls)
 
 
@@ -2056,6 +2083,26 @@ def _mem_info() -> str:
     return f"RSS={rss_mb:.0f}MB | Sys={avail_gb:.1f}GB free ({vm.percent}%)"
 
 
+def _rss_mb() -> float:
+    """Return current process RSS in MB."""
+    return psutil.Process().memory_info().rss / 1024 / 1024
+
+
+def _mem_pressure_relief(progress_fn=None):
+    """If RSS > MEM_THROTTLE_MB, force gc and log. Returns True if was under pressure."""
+    rss = _rss_mb()
+    if rss > MEM_THROTTLE_MB:
+        gc.collect()
+        rss_after = _rss_mb()
+        msg = f"  ⚠️ Pressão de memória: {rss:.0f}MB → gc → {rss_after:.0f}MB (limite: {MEM_THROTTLE_MB}MB)"
+        if progress_fn:
+            progress_fn(msg)
+        else:
+            log.warning(msg)
+        return True
+    return False
+
+
 def execute_crawl(
     fonte_id: str,
     site_url: str,
@@ -2197,12 +2244,17 @@ def execute_crawl(
         batch_num = batch_start // SAVE_EVERY + 1
         total_batches = (total + SAVE_EVERY - 1) // SAVE_EVERY
 
+        # Memory-pressure backoff: reduz workers se RAM alta
+        under_pressure = _mem_pressure_relief(progress)
+        effective_workers = max(1, CONCURRENCY // 2) if under_pressure else CONCURRENCY
+
         tmpl_status = "⚡ template" if template.is_ready else f"📚 aprendendo ({template._sample_count}/{SiteTemplate.LEARN_PAGES})"
-        progress(f"\n  Batch {batch_num}/{total_batches} — {len(batch_urls)} URLs (x{CONCURRENCY} paralelo) [{tmpl_status}]")
+        workers_info = f"x{effective_workers}" + (" ⚠️RAM" if under_pressure else f" paralelo")
+        progress(f"\n  Batch {batch_num}/{total_batches} — {len(batch_urls)} URLs ({workers_info}) [{tmpl_status}]")
 
         batch_results: list[ImovelInput] = []
 
-        with ThreadPoolExecutor(max_workers=CONCURRENCY) as pool:
+        with ThreadPoolExecutor(max_workers=effective_workers) as pool:
             future_map = {pool.submit(_enrich_one, u): u for u in batch_urls}
 
             for future in as_completed(future_map):
