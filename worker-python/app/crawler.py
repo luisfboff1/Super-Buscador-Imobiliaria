@@ -45,7 +45,7 @@ log = get_logger("crawler")
 
 MAX_PAGES = int(os.environ.get("CRAWL_MAX_PAGES", "200"))
 MAX_ENRICH = int(os.environ.get("CRAWL_MAX_ENRICH", "0"))  # 0 = todos (sem limite)
-CONCURRENCY = int(os.environ.get("CRAWL_CONCURRENCY", "5"))  # paralelo (2 era conservador — 5 é seguro com Playwright por página)
+CONCURRENCY = int(os.environ.get("CRAWL_CONCURRENCY", "3"))  # paralelo (reduzido de 5→3 para evitar crash de Chromium por OOM)
 
 # Cache por domínio: se as primeiras páginas SEMPRE precisaram de stealth, pular HTTP nas demais
 # {hostname: True=stealth obrigatório, False=HTTP funciona, None=ainda aprendendo}
@@ -1269,6 +1269,69 @@ def discover_property_urls(
         _max_page_val = MAX_PAGES * max(_offset_step, 1)  # Para offset-based, escalar o limite
 
         while page_num <= _max_page_val and empty_pages < 2:
+            # ── Parallel batch fetching: uma vez que template está confirmado ──
+            if template_confirmed:
+                # HTTP puro: 5 em paralelo. SPA/Playwright: 3 em paralelo (RAM limitada)
+                BATCH_SIZE = 3 if stealth_required else 5
+                batch_start = page_num
+                batch_nums = [
+                    batch_start + i * _offset_step
+                    for i in range(BATCH_SIZE)
+                    if batch_start + i * _offset_step <= _max_page_val
+                ]
+                if not batch_nums:
+                    break
+
+                batch_urls = [(pn, template.replace("{N}", str(pn))) for pn in batch_nums]
+                use_stealth_batch = stealth_required
+
+                # Fetch em paralelo com ThreadPoolExecutor
+                batch_results: dict[int, list[str]] = {}
+                with ThreadPoolExecutor(max_workers=BATCH_SIZE) as pool:
+                    futures = {
+                        pool.submit(fetch_page, url, use_stealth_batch): pn
+                        for pn, url in batch_urls
+                    }
+                    for fut in as_completed(futures):
+                        pn = futures[fut]
+                        try:
+                            pg_obj = fut.result()
+                        except Exception:
+                            pg_obj = None
+                        if pg_obj:
+                            batch_results[pn] = extract_detail_links(pg_obj, base_hostname)
+                        else:
+                            batch_results[pn] = []
+
+                # Processar resultados em ordem
+                hit_empty_end = False
+                for pn in sorted(batch_results.keys()):
+                    links = batch_results[pn]
+                    new_links = [l for l in links if l not in all_detail_urls]
+                    if not new_links:
+                        empty_pages += 1
+                        consecutive_ok = 0
+                        if empty_pages >= 2:
+                            hit_empty_end = True
+                            break
+                    else:
+                        empty_pages = 0
+                        consecutive_ok += 1
+                        useful_pages += 1
+                        for l in links:
+                            all_detail_urls.add(l)
+
+                last_pn = sorted(batch_results.keys())[-1] if batch_results else batch_nums[-1]
+                progress(f"    Págs {batch_nums[0]}-{last_pn}: "
+                         f"batch {'stealth' if use_stealth_batch else 'HTTP'} ×{BATCH_SIZE}, "
+                         f"total: {len(all_detail_urls)}")
+
+                if hit_empty_end:
+                    break
+                page_num = max(batch_nums) + _offset_step
+                continue
+
+            # ── Sequential fetching (template não confirmado ou SPA) ──
             page_url = template.replace("{N}", str(page_num))
 
             # Depois de confirmar template, usar HTTP puro (10x mais rápido)
@@ -1293,7 +1356,17 @@ def discover_property_urls(
                     links = extract_detail_links(page, base_hostname)
                     if links:
                         stealth_required = True
-                        progress(f"    (SPA detectado: HTTP vazio, usando Playwright)")
+                        # Detectar redirect no Playwright (ex: ?page=4 → ?pagina=4)
+                        final_url = getattr(page, 'url', page_url) or page_url
+                        if final_url != page_url:
+                            new_tmpl = _url_to_template(final_url, page_num=page_num, listing_url=listing_url)
+                            if new_tmpl and new_tmpl != template:
+                                template = new_tmpl
+                                progress(f"    (SPA detectado + redirect: usando {new_tmpl})")
+                            else:
+                                progress(f"    (SPA detectado: HTTP vazio, usando Playwright)")
+                        else:
+                            progress(f"    (SPA detectado: HTTP vazio, usando Playwright)")
 
             new_links = [l for l in links if l not in all_detail_urls]
 
@@ -1312,7 +1385,17 @@ def discover_property_urls(
                 # Confirmar template depois de 2 págs consecutivas com resultados
                 if not template_confirmed and consecutive_ok >= 2:
                     template_confirmed = True
-                    progress(f"    ✓ Template confirmado — acelerando com HTTP")
+                    # Detectar redirect: se URL final diferir, atualizar template
+                    final_url = getattr(page, 'url', page_url) or page_url
+                    if final_url != page_url:
+                        new_tmpl = _url_to_template(final_url, page_num=page_num, listing_url=listing_url)
+                        if new_tmpl and new_tmpl != template:
+                            progress(f"    ✓ Template confirmado — redirect detectado, usando: {new_tmpl}")
+                            template = new_tmpl
+                        else:
+                            progress(f"    ✓ Template confirmado — acelerando com HTTP")
+                    else:
+                        progress(f"    ✓ Template confirmado — acelerando com HTTP")
 
             page_num += _offset_step
 
