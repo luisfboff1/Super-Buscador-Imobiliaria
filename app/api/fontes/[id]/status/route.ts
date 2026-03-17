@@ -4,8 +4,9 @@ import { db } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import * as tenantSchema from "@/lib/db/schema/tenant";
 
-// Se o heartbeat do worker tem mais de 90s, consideramos morto
-const HEARTBEAT_STALE_MS = 90 * 1000;
+// Se o heartbeat do worker tem mais de 3min, consideramos morto
+// (worker envia heartbeat a cada 30s — margem de 6x)
+const HEARTBEAT_STALE_MS = 180 * 1000;
 
 export async function GET(
   _req: Request,

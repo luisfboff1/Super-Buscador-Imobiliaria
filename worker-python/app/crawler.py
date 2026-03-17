@@ -1020,6 +1020,7 @@ def discover_property_urls(
 
     # Template de paginação confirmado na listagem anterior (reutilizar)
     confirmed_template: Optional[str] = None
+    _any_stealth_required = False  # Track if any listing needed Playwright for data
 
     for listing_idx, listing_url in enumerate(listing_urls, 1):
         progress(f"\n  📂 Listagem {listing_idx}/{len(listing_urls)}: {listing_url}")
@@ -1378,6 +1379,7 @@ def discover_property_urls(
                     links = extract_detail_links(page, base_hostname)
                     if links:
                         stealth_required = True
+                        _any_stealth_required = True
                         # Detectar redirect no Playwright (ex: ?page=4 → ?pagina=4)
                         final_url = getattr(page, 'url', page_url) or page_url
                         if final_url != page_url:
@@ -1495,6 +1497,7 @@ def discover_property_urls(
                                     fb_lnks = extract_detail_links(pg, base_hostname)
                                     if fb_lnks:
                                         stealth_required = True
+                                        _any_stealth_required = True
                                         progress(f"    (SPA detectado no fallback: usando Playwright)")
                             fb_new_lnks = [l for l in fb_lnks if l not in all_detail_urls]
                             if not fb_new_lnks:
@@ -1621,6 +1624,13 @@ def discover_property_urls(
                 llm_pagination_hint["tipo"] = "query_param"
 
     progress(f"\n✓ Descoberta concluída: {len(all_detail_urls)} URLs")
+
+    # Se a descoberta detectou SPA, propagar para enriquecimento via _domain_stealth
+    # (evita que scrape_property_page tente HTTP e pegue HTML incompleto)
+    if _any_stealth_required:
+        with _domain_stealth_lock:
+            _domain_stealth[base_hostname] = True
+        progress(f"🚀 [{base_hostname}] SPA confirmado na paginação — enriquecimento usará Playwright")
 
     # Free listing cache (page objects hold parsed DOMs - several MB each)
     listing_cache.clear()
@@ -2013,6 +2023,35 @@ def scrape_property_page(
 
     # Extrair dados via pipeline cascata (com template se disponível)
     result = extract_property_data(html, url, fallback_cidade, fallback_estado, template=template)
+
+    # Quality-based stealth fallback: HTTP retornou HTML mas dados muito incompletos
+    # (sem preço e sem JSON-LD → provavelmente SPA que precisa de JS)
+    if source == "http" and _forced_stealth is not True:
+        _fields = 0
+        if result:
+            if result.preco: _fields += 1
+            if result.quartos: _fields += 1
+            if result.area_m2: _fields += 1
+            if result.bairro: _fields += 1
+        has_jsonld = '"@type"' in html and '"RealEstateListing"' in html
+        if _fields < 2 and not has_jsonld:
+            # HTTP HTML sem dados estruturados — tentar Playwright
+            log.info(f"  ↳ HTTP incompleto ({_fields} campos, sem JSON-LD) — tentando stealth")
+            page2 = fetch_page(url, stealth=True)
+            if page2:
+                html2 = safe_html(page2)
+                del page2
+                if html2 and len(html2) > len(html) * 1.2:  # stealth trouxe mais conteúdo
+                    result2 = extract_property_data(html2, url, fallback_cidade, fallback_estado, template=template)
+                    if result2:
+                        _fields2 = sum(1 for v in [result2.preco, result2.quartos, result2.area_m2, result2.bairro] if v)
+                        if _fields2 > _fields:
+                            result = result2
+                            source = "stealth"
+                            needed_stealth = True
+                            log.info(f"  ↳ Stealth melhor: {_fields2} vs {_fields} campos")
+                    del html2
+
     del html  # Release HTML string after extraction
 
     elapsed = time.time() - start
@@ -2155,6 +2194,20 @@ def execute_crawl(
 
     recent_logs: list[str] = []
 
+    # ── Heartbeat periódico (evita que o frontend declare o worker como morto) ──
+    _heartbeat_stop = threading.Event()
+    def _heartbeat_loop():
+        """Atualiza heartbeatAt a cada 30s enquanto o crawl roda."""
+        while not _heartbeat_stop.wait(30):
+            try:
+                update_crawl_progress(fonte_id, {
+                    "heartbeatAt": datetime.utcnow().isoformat(),
+                })
+            except Exception as e:
+                log.warning(f"Heartbeat periódico falhou: {e}")
+    _heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
+    _heartbeat_thread.start()
+
     # ── FASE 1: Descoberta ────────────────────────────
     progress(f"\n{'='*60}")
     progress(f"CRAWL INICIADO — {site_url}")
@@ -2169,6 +2222,7 @@ def execute_crawl(
 
     if not urls:
         progress("Nenhum imóvel encontrado — finalizando")
+        _heartbeat_stop.set()
         _push_progress("concluido", "Nenhum imóvel encontrado", 0, 0, finished=True)
         return stats
 
@@ -2415,6 +2469,7 @@ def execute_crawl(
             log.warning(f"Falha ao limpar template: {_e}")
 
     # Progresso final para o frontend
+    _heartbeat_stop.set()  # parar heartbeat periódico
     _push_progress(
         "concluido",
         f"Concluído! {n_complete} completos, {n_incomplete} parciais, {n_failed} erros",
