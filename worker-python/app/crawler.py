@@ -798,7 +798,7 @@ REGRAS:
         )
 
         if not answer:
-            progress("  ⚠️ LLM retornou resposta vazia (ver log [openai]/[groq] acima)")
+            progress("  ⚠️ LLM retornou resposta vazia (ver log [openai] acima)")
             return None
 
         # Limpar resposta: remover markdown code blocks se existirem

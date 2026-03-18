@@ -4,7 +4,7 @@ Extrator de dados de imóveis.
 Estratégia em cascata com merge:
 1. JSON-LD  — dados estruturados embutidos pela imobiliária (grátis, perfeito)
 2. Regex    — preço (R$) e área (m²) via regex universal (grátis, funciona em todos os sites)
-3. LLM      — Groq llama-3.1-8b-instant preenche TODOS os campos faltantes
+3. LLM      — OpenAI gpt-5-nano (reasoning minimal) preenche campos faltantes
 
 O LLM é chamado sempre que QUALQUER campo estiver faltando (preco, tipo, transacao,
 quartos, banheiros, vagas, area, bairro, descricao). Queremos o máximo de dados possível.
@@ -16,7 +16,6 @@ import json
 from typing import Optional
 
 from bs4 import BeautifulSoup
-from groq import Groq
 from openai import OpenAI
 
 from app.db import ImovelInput
@@ -24,34 +23,22 @@ from app.logger import get_logger
 
 log = get_logger("extractor")
 
-# ─── LLM clients (lazy init) ──────────────────────────────────────────────────
+# ─── LLM client (lazy init) ───────────────────────────────────────────────────
 
-_groq_client: Optional[Groq] = None
 _openai_client: Optional[OpenAI] = None
 
 
-def _get_groq() -> Groq:
-    global _groq_client
-    if _groq_client is None:
-        api_key = os.environ.get("GROQ_API_KEY")
-        if not api_key:
-            raise RuntimeError("GROQ_API_KEY não configurada")
-        # max_retries=0: desliga retry automático do SDK (que espera 15s!)
-        _groq_client = Groq(api_key=api_key, max_retries=0)
-    return _groq_client
-
-
-def _get_openai() -> Optional[OpenAI]:
+def _get_openai() -> OpenAI:
     global _openai_client
     if _openai_client is None:
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
-            return None
+            raise RuntimeError("OPENAI_API_KEY não configurada")
         _openai_client = OpenAI(api_key=api_key)
     return _openai_client
 
 
-# ─── LLM universal: OpenAI primary → Groq fallback ─────────────────────────────
+# ─── LLM universal: OpenAI gpt-5-nano ──────────────────────────────────────────
 
 def _llm_chat(
     messages: list[dict],
@@ -59,53 +46,24 @@ def _llm_chat(
     reasoning_effort: str = "minimal",
 ) -> Optional[str]:
     """
-    Chama LLM com fallback automático: OpenAI (rápido, confiável) → Groq.
+    Chama OpenAI gpt-5-nano com reasoning minimal.
     max_tokens: teto de completion tokens. None = sem limite (modelo decide).
               Padrão 600 — suficiente para JSON de imóvel.
-    reasoning_effort: "minimal" = menor esforço de raciocínio do gpt-5-nano.
     Retorna o texto da resposta ou None.
     """
     import time as _time
 
-    # 1. Tentar OpenAI (confiável, sem truncamento)
-    openai_client = _get_openai()
-    if openai_client is not None:
-        _t0 = _time.monotonic()
-        try:
-            kwargs = dict(
-                model="gpt-5-nano",
-                messages=messages,
-                reasoning_effort=reasoning_effort,
-            )
-            if max_tokens is not None:
-                kwargs["max_completion_tokens"] = max_tokens
-            response = openai_client.chat.completions.create(**kwargs)
-            _elapsed = _time.monotonic() - _t0
-            choice = response.choices[0]
-            text = choice.message.content or ""
-            finish = choice.finish_reason
-            usage = response.usage
-            tokens_in = usage.prompt_tokens if usage else 0
-            tokens_out = usage.completion_tokens if usage else 0
-            log.info(f"[openai] finish={finish} tokens: {tokens_in}→{tokens_out} len={len(text)} time={_elapsed:.1f}s")
-            if not text:
-                log.warning(f"[openai] Resposta vazia (finish={finish}, tokens_out={tokens_out})")
-            return text
-        except Exception as openai_err:
-            _elapsed = _time.monotonic() - _t0
-            err_type = type(openai_err).__name__
-            log.warning(f"[openai] {err_type} após {_elapsed:.1f}s: {openai_err}")
-    else:
-        log.warning("[openai] OPENAI_API_KEY não configurada — pulando OpenAI")
-
-    # 2. Fallback: Groq (grátis, mas trunca respostas longas)
     _t0 = _time.monotonic()
     try:
-        client = _get_groq()
-        response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+        client = _get_openai()
+        kwargs = dict(
+            model="gpt-5-nano",
             messages=messages,
+            reasoning_effort=reasoning_effort,
         )
+        if max_tokens is not None:
+            kwargs["max_completion_tokens"] = max_tokens
+        response = client.chat.completions.create(**kwargs)
         _elapsed = _time.monotonic() - _t0
         choice = response.choices[0]
         text = choice.message.content or ""
@@ -113,14 +71,14 @@ def _llm_chat(
         usage = response.usage
         tokens_in = usage.prompt_tokens if usage else 0
         tokens_out = usage.completion_tokens if usage else 0
-        log.info(f"[groq] finish={finish} tokens: {tokens_in}→{tokens_out} len={len(text)} time={_elapsed:.1f}s")
+        log.info(f"[openai] finish={finish} tokens: {tokens_in}→{tokens_out} len={len(text)} time={_elapsed:.1f}s")
         if not text:
-            log.warning(f"[groq] Resposta vazia (finish={finish}, tokens_out={tokens_out})")
+            log.warning(f"[openai] Resposta vazia (finish={finish}, tokens_out={tokens_out})")
         return text
-    except Exception as groq_err:
+    except Exception as err:
         _elapsed = _time.monotonic() - _t0
-        err_type = type(groq_err).__name__
-        log.warning(f"[groq] {err_type} após {_elapsed:.1f}s: {groq_err}")
+        err_type = type(err).__name__
+        log.warning(f"[openai] {err_type} após {_elapsed:.1f}s: {err}")
         return None
 
 
@@ -225,6 +183,9 @@ def _sanitize_location(val) -> Optional[str]:
         return None
     # Rejeitar valores de UI/navegação (breadcrumbs, labels, etc.)
     if v.lower() in _UI_BLACKLIST:
+        return None
+    # Rejeitar se parece tipo de imóvel (apartamento, casa, etc.)
+    if _detect_tipo("", v) is not None:
         return None
     return v or None
 
@@ -756,6 +717,10 @@ def _parse_template_field(field: str, raw_text: str):
     # Rejeitar strings muito curtas ou que são só dígitos soltos
     if len(text) < 2 or text.isdigit():
         return None
+    # Cross-validação genérica: bairro/cidade NÃO podem ser tipos de imóvel.
+    # Ex: CSS selector errado retorna "Apartamento" no campo bairro.
+    if field in ("bairro", "cidade") and _detect_tipo("", text) is not None:
+        return None
     return text
 
 
@@ -792,6 +757,10 @@ class SiteTemplate:
         self._sample_count = 0
         # Rastrear quais seletores foram identificados pela LLM (semanticamente confiáveis)
         self._llm_voted: dict[str, set] = {}  # field -> {selector, ...}
+        # Amostras para validação positiva: (html, url, data) das páginas de aprendizado.
+        # Usadas em _confirm() para testar se os seletores candidatos retornam
+        # valores que batem com ground truth (URL slug, dados extraídos pela LLM).
+        self._learn_samples: list[tuple[str, str, 'ImovelInput']] = []
         # Métricas
         self.hits = 0
         self.misses = 0
@@ -844,11 +813,15 @@ class SiteTemplate:
                 self._votes[field][sel] = self._votes[field].get(sel, 0) + 1
 
         self._sample_count += 1
+        # Guardar amostra para validação positiva na confirmação
+        self._learn_samples.append((html, data.url_anuncio or "", data))
         coverage = f"{len(llm_selectors)}/{len([f for f in self.ALL_FIELDS if getattr(data, f, None) is not None])} LLM"
         log.debug(f"📘 Template amostra {self._sample_count}/{self.LEARN_PAGES} ({coverage})")
 
         if self._sample_count >= self.LEARN_PAGES:
             self._confirm()
+            # Liberar memória — amostras não são mais necessárias
+            self._learn_samples.clear()
 
     # Campos opcionais: não aparecem em todos os tipos de imóvel (terreno não tem
     # banheiros, sala não tem quartos), então MIN_VOTES=1 é suficiente para eles.
@@ -898,6 +871,48 @@ class SiteTemplate:
             else:
                 sel_to_field[sel] = f
 
+        # ── Validação positiva: testar seletores de bairro/cidade contra URL ground truth ──
+        # Ideia: URLs BR codificam localização (/imoveis/venda/{cidade}/{bairro}/...).
+        # Se o CSS selector retorna valores que NÃO batem com o que a URL diz,
+        # o seletor está errado e deve ser descartado — mesmo que tenha votos altos.
+        for loc_field in ("bairro", "cidade"):
+            sel = self.confirmed.get(loc_field)
+            if not sel or not self._learn_samples:
+                continue
+            mismatches = 0
+            comparisons = 0
+            for sample_html, sample_url, sample_data in self._learn_samples:
+                url_bairro, url_cidade = _extract_location_from_url(sample_url)
+                url_val = url_bairro if loc_field == "bairro" else url_cidade
+                if not url_val:
+                    continue  # URL não tem essa info, pular
+                # Testar o que o seletor retorna nesta amostra
+                try:
+                    sample_soup = BeautifulSoup(sample_html, "lxml")
+                    el = sample_soup.select_one(sel)
+                    css_val = el.get_text(strip=True) if el else None
+                except Exception:
+                    css_val = None
+                if not css_val:
+                    continue
+                comparisons += 1
+                # Normalizar para comparação
+                css_norm = css_val.lower().strip()
+                url_norm = url_val.lower().strip()
+                # Match: substring ou edit distance curta ("Sao Luiz" vs "São Luiz")
+                if url_norm not in css_norm and css_norm not in url_norm:
+                    mismatches += 1
+                    log.debug(
+                        f"  ⚠ Validação positiva '{loc_field}': CSS='{css_val}' vs URL='{url_val}' — mismatch"
+                    )
+            # Se >50% dos comparáveis não batem, descartar o seletor
+            if comparisons >= 2 and mismatches / comparisons > 0.5:
+                log.warning(
+                    f"⚠ Template: seletor de '{loc_field}' rejeitado por validação positiva "
+                    f"({mismatches}/{comparisons} não batem com URL): {sel!r}"
+                )
+                del self.confirmed[loc_field]
+
         has_core = bool({"titulo", "preco"} & set(self.confirmed))
         if has_core and len(self.confirmed) >= self.MIN_FIELDS:
             self.is_ready = True
@@ -920,6 +935,9 @@ class SiteTemplate:
 
         soup = BeautifulSoup(html, "lxml")
         data: dict = {}
+        # Rastrear seletores que retornam valor bruto mas são rejeitados pela validação
+        # (ex: bairro retorna "Apartamento" → tipo de imóvel, não bairro real)
+        _rejected_selectors: set = set()
 
         for field, selector in self.confirmed.items():
             try:
@@ -930,8 +948,20 @@ class SiteTemplate:
                         parsed = _parse_template_field(field, raw)
                         if parsed is not None:
                             data[field] = parsed
+                        elif field in ("bairro", "cidade"):
+                            # Seletor retornou valor que foi rejeitado — marcar para correção
+                            _rejected_selectors.add(field)
+                            log.debug(
+                                f"  ⚠ Template: seletor de '{field}' retornou valor rejeitado: "
+                                f"'{raw[:50]}' — será removido para auto-correção"
+                            )
             except Exception:
                 continue
+
+        # Remover seletores de bairro/cidade que consistentemente retornam lixo
+        for bad_field in _rejected_selectors:
+            del self.confirmed[bad_field]
+            log.info(f"  🗑 Template: removido seletor ruim de '{bad_field}' para auto-correção")
 
         if len(data) < 2:
             self.misses += 1
@@ -1003,7 +1033,7 @@ class SiteTemplate:
         return t
 
 
-# ─── 4. Extração via LLM (Groq) — o "agente" que completa tudo ──────────────
+# ─── 4. Extração via LLM (OpenAI) — o "agente" que completa tudo ──────────────
 
 SYSTEM_PROMPT = """Você é um extrator de dados de imóveis do mercado imobiliário brasileiro.
 Analise o conteúdo da página de um anúncio de imóvel e extraia TODOS os dados disponíveis.
@@ -1130,7 +1160,7 @@ def html_to_clean_text(html: str) -> str:
 
 
 def extract_via_llm(html: str, url: str) -> Optional[ImovelInput]:
-    """Extrai dados via Groq LLM (llama-3.1-8b-instant)."""
+    """Extrai dados via OpenAI gpt-5-nano."""
     clean_text = html_to_clean_text(html)
 
     if len(clean_text) < 100:
@@ -1241,33 +1271,67 @@ _FIELDS_EXPECTED_BY_TIPO: dict[str, set] = {
 }
 
 
+# Segmentos de URL genéricos que indicam transação/seção, não localização.
+_URL_SECTION_SLUGS = frozenset({
+    "imovel", "imoveis", "imovel-detalhe", "property", "properties",
+    "venda", "aluguel", "locacao", "comprar", "alugar", "lancamento", "lancamentos",
+    "temporada", "permuta",
+})
+
+
 def _extract_location_from_url(url: str) -> tuple[Optional[str], Optional[str]]:
     """
-    Extrai (bairro, cidade) de URLs no padrão BR:
-      /imovel/{tipo}/{cidade-slug}/{bairro-slug}/{id}
-    Ex: /imovel/casa/caxias-do-sul/charqueadas/18432 → ("Charqueadas", "Caxias do Sul")
+    Extrai (bairro, cidade) de URLs imobiliárias BR de forma genérica.
+
+    Estratégia: percorre os segmentos do path, descarta seções conhecidas
+    ("imoveis", "venda", etc.) e tipos de imóvel, e identifica slugs
+    geográficos (cidade, bairro) pelos que sobram.
+
+    Funciona para padrões variados:
+      /imovel/casa/caxias-do-sul/charqueadas/18432
+      /imoveis/venda/farroupilha/sao-luiz/-/casa/3419/imovel/3371768
+      /imoveis/aluguel/porto-alegre/centro/-/apartamento/123/imovel/456
     """
     def slug_to_name(slug: str) -> str:
-        return slug.replace("-", " ").title()
+        return slug.replace("--", " ").replace("-", " ").title()
+
+    def _is_tipo_slug(slug: str) -> bool:
+        """Detecta se o slug é um tipo de imóvel (apartamento, casa, etc.)."""
+        name = slug.replace("-", " ").lower()
+        return _detect_tipo("", name) is not None
 
     try:
         from urllib.parse import urlparse
         path = urlparse(url).path.strip("/")
         parts = path.split("/")
-        # Pattern: imovel / tipo / cidade / bairro / id
-        if len(parts) >= 5 and parts[0] == "imovel":
-            cidade_slug = parts[2]
-            bairro_slug = parts[3]
-            # Skip if last segment is pure digits (it's the ID, not bairro)
-            if not bairro_slug.isdigit():
-                return slug_to_name(bairro_slug), slug_to_name(cidade_slug)
-        # Pattern: cidade / bairro / tipo / id (other sites)
-        if len(parts) >= 3:
-            for i, part in enumerate(parts[:-1]):
-                if re.match(r'^\d+$', parts[i + 1]) and not part.isdigit():
-                    bairro = slug_to_name(part)
-                    cidade = slug_to_name(parts[i - 1]) if i > 0 else None
-                    return bairro, cidade
+
+        # Filtrar segmentos que NÃO são localização:
+        # - seções (imoveis, venda, etc.)
+        # - tipos de imóvel (casa, apartamento, etc.)
+        # - IDs numéricos puros
+        # - placeholder "-" (usado como wildcard)
+        # - nomes de empreendimento (mantemos por enquanto, filtramos depois)
+        location_slugs: list[str] = []
+        for part in parts:
+            p = part.lower().strip()
+            if not p or p == "-":
+                continue
+            if p.isdigit():
+                continue
+            if p in _URL_SECTION_SLUGS:
+                continue
+            if _is_tipo_slug(p):
+                continue
+            location_slugs.append(part)
+
+        # Padrão mais comum BR: primeiro slug geográfico = cidade, segundo = bairro
+        if len(location_slugs) >= 2:
+            cidade_slug = location_slugs[0]
+            bairro_slug = location_slugs[1]
+            return slug_to_name(bairro_slug), slug_to_name(cidade_slug)
+        if len(location_slugs) == 1:
+            # Apenas cidade (sem bairro na URL)
+            return None, slug_to_name(location_slugs[0])
     except Exception:
         pass
     return None, None
@@ -1548,6 +1612,24 @@ def extract_property_data(
 
             tpl_result.imagens = imagens if imagens else tpl_result.imagens
 
+            # ── Auto-corrigir template: se URL preencheu bairro/cidade que o CSS
+            # não tinha (seletor removido por retornar lixo), buscar o seletor
+            # correto no HTML para o valor da URL e atualizar o template.
+            if url_bairro or url_cidade:
+                _url_heal_soup = BeautifulSoup(html, "lxml")
+                _url_updated = []
+                for loc_f, loc_v in [("bairro", url_bairro), ("cidade", url_cidade)]:
+                    if loc_v and loc_f not in template.confirmed:
+                        sels = _find_selectors_for_value(_url_heal_soup, loc_v, loc_f)
+                        if sels:
+                            template.confirmed[loc_f] = sels[0]
+                            _url_updated.append(f"{loc_f}={loc_v}")
+                if _url_updated:
+                    log.info(
+                        f"  ✅ Template auto-corrigido via URL: +{', '.join(_url_updated)} "
+                        f"({len(template.confirmed)} selectors total)"
+                    )
+
             # ── Self-healing: campos ainda nulos → LLM preenche + atualiza template
             healed = _llm_heal_missing_fields(html, url, tpl_result)
             if healed:
@@ -1558,7 +1640,7 @@ def extract_property_data(
                     f for f in ("quartos", "banheiros", "vagas", "area_m2",
                                 "preco", "bairro", "cidade")
                     if getattr(healed, f, None) is not None
-                    and f not in template.confirmed  # só adiciona se não tinha
+                    and f not in template.confirmed  # só adiciona se não tinha (ou foi removido)
                 ]
                 updated = []
                 for field in healed_fields:
