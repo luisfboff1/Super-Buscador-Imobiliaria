@@ -79,12 +79,15 @@ export function FonteActions({ fonteId, status }: FonteActionsProps) {
         setProgress(data.progress as CrawlProgress);
 
         // Detecta travamento: progresso parado por STALL_MS
+        // Se o heartbeat é recente, o worker está vivo (ex: fase de descoberta com done=0)
         const done = (data.progress as CrawlProgress).done ?? 0;
+        const heartbeatAt = (data.progress as Record<string, unknown>).heartbeatAt as string | undefined;
+        const heartbeatFresh = heartbeatAt && (now - new Date(heartbeatAt).getTime()) < STALL_MS;
         const last = lastProgressRef.current;
         if (!last || done !== last.done) {
           lastProgressRef.current = { done, ts: now };
-        } else if (now - last.ts > STALL_MS && !data.progress.finished) {
-          setError("Crawl parece travado (sem progresso há 8 min). Verifique o worker ou tente novamente.");
+        } else if (now - last.ts > STALL_MS && !data.progress.finished && !heartbeatFresh) {
+          setError("Crawl parece travado (sem progresso há 2 min). Verifique o worker ou tente novamente.");
           stopPolling();
           setSyncing(false);
           return;
