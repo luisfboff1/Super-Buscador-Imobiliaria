@@ -1331,10 +1331,9 @@ def discover_property_urls(
         _max_page_val = MAX_PAGES * max(_offset_step, 1)  # Para offset-based, escalar o limite
 
         while page_num <= _max_page_val and empty_pages < 2:
-            # ── Parallel batch fetching: uma vez que template está confirmado ──
-            if template_confirmed:
-                # HTTP puro: 5 em paralelo. SPA/Playwright: 3 em paralelo (RAM limitada)
-                BATCH_SIZE = 3 if stealth_required else 5
+            # ── Parallel batch fetching: HTTP puro, template confirmado, sem SPA ──
+            if template_confirmed and not stealth_required:
+                BATCH_SIZE = 5
                 batch_start = page_num
                 batch_nums = [
                     batch_start + i * _offset_step
