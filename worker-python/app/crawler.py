@@ -792,7 +792,7 @@ REGRAS:
                 {"role": "system", "content": "Você é um especialista em análise de sites imobiliários brasileiros. Retorne SOMENTE JSON válido, sem markdown."},
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=1200,
+            max_tokens=2048,
         )
 
         if not answer:
@@ -1371,6 +1371,17 @@ def discover_property_urls(
                          f"total: {len(all_detail_urls)}")
 
                 if hit_empty_end:
+                    # SPA pattern 2: HTTP retorna links mas sempre os mesmos
+                    # (paginação client-side, SSR ignora ?pagination=N)
+                    if not use_stealth_batch:
+                        has_content = any(len(batch_results.get(pn, [])) > 0 for pn in batch_results)
+                        if has_content:
+                            stealth_required = True
+                            empty_pages = 0
+                            page_num = batch_nums[0]
+                            progress(f"    ⚠️ SPA detectado: HTTP retorna mesmos links "
+                                     f"(paginação client-side). Retentando com Playwright.")
+                            continue
                     break
                 page_num = max(batch_nums) + _offset_step
                 continue
