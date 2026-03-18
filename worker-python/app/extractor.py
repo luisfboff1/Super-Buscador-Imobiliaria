@@ -765,6 +765,10 @@ class SiteTemplate:
         self.hits = 0
         self.misses = 0
         self.llm_calls = 0
+        # Contagem de vezes que um seletor foi removido por retornar lixo.
+        # Se > _MAX_SELECTOR_RESETS, para de tentar CSS para esse campo.
+        self._selector_resets: dict[str, int] = {}
+        _MAX_SELECTOR_RESETS = 3
 
     @property
     def learning(self) -> bool:
@@ -961,7 +965,15 @@ class SiteTemplate:
         # Remover seletores de bairro/cidade que consistentemente retornam lixo
         for bad_field in _rejected_selectors:
             del self.confirmed[bad_field]
-            log.info(f"  🗑 Template: removido seletor ruim de '{bad_field}' para auto-correção")
+            self._selector_resets[bad_field] = self._selector_resets.get(bad_field, 0) + 1
+            resets = self._selector_resets[bad_field]
+            if resets >= self._MAX_SELECTOR_RESETS:
+                log.info(
+                    f"  🛑 Template: '{bad_field}' removido {resets}x — "
+                    f"CSS instável, confiando apenas na URL"
+                )
+            else:
+                log.info(f"  🗑 Template: removido seletor ruim de '{bad_field}' para auto-correção ({resets}/{self._MAX_SELECTOR_RESETS})")
 
         if len(data) < 2:
             self.misses += 1
@@ -1619,7 +1631,8 @@ def extract_property_data(
                 _url_heal_soup = BeautifulSoup(html, "lxml")
                 _url_updated = []
                 for loc_f, loc_v in [("bairro", url_bairro), ("cidade", url_cidade)]:
-                    if loc_v and loc_f not in template.confirmed:
+                    if loc_v and loc_f not in template.confirmed \
+                            and template._selector_resets.get(loc_f, 0) < template._MAX_SELECTOR_RESETS:
                         sels = _find_selectors_for_value(_url_heal_soup, loc_v, loc_f)
                         if sels:
                             template.confirmed[loc_f] = sels[0]
@@ -1641,6 +1654,7 @@ def extract_property_data(
                                 "preco", "bairro", "cidade")
                     if getattr(healed, f, None) is not None
                     and f not in template.confirmed  # só adiciona se não tinha (ou foi removido)
+                    and template._selector_resets.get(f, 0) < template._MAX_SELECTOR_RESETS
                 ]
                 updated = []
                 for field in healed_fields:
