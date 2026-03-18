@@ -783,6 +783,8 @@ REGRAS:
   Ex: se existe /imoveis/comprar, a pág 2 provavelmente é /imoveis/comprar?page=2
 - Se não houver listagens visíveis, retorne listagens como array vazio.
 - Retorne SOMENTE o JSON válido, nada mais.
+- IMPORTANTE: Limite a no máximo 5 URLs de listagem no total (as mais abrangentes/genéricas).
+  Menos URLs mais genéricas é melhor do que muitas URLs com filtros específicos.
 """
 
     try:
@@ -792,7 +794,7 @@ REGRAS:
                 {"role": "system", "content": "Você é um especialista em análise de sites imobiliários brasileiros. Retorne SOMENTE JSON válido, sem markdown."},
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=2048,
+            max_tokens=None,  # sem limite — reasoning_effort=minimal já controla
         )
 
         if not answer:
@@ -806,7 +808,23 @@ REGRAS:
             answer = re.sub(r"\s*```$", "", answer)
         answer = answer.strip()
 
-        result = json_mod.loads(answer)
+        try:
+            result = json_mod.loads(answer)
+        except json_mod.JSONDecodeError:
+            # Tentar recuperar JSON truncado (finish_reason=length)
+            # Achar o último } ou ] válido
+            for _end_chr in ['}', ']']:
+                _last = answer.rfind(_end_chr)
+                if _last > 0:
+                    try:
+                        result = json_mod.loads(answer[:_last + 1])
+                        progress(f"  ⚠️ JSON truncado recuperado (cortado no char {_last + 1})")
+                        break
+                    except json_mod.JSONDecodeError:
+                        continue
+            else:
+                progress(f"  ⚠️ JSON parse error. Primeiros 500 chars: {answer[:500]}")
+                return None
 
         # Log dos insights
         listagens = result.get("listagens", [])

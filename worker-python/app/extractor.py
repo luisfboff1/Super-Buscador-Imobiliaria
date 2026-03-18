@@ -55,13 +55,14 @@ def _get_openai() -> Optional[OpenAI]:
 
 def _llm_chat(
     messages: list[dict],
-    max_tokens: int = 600,
+    max_tokens: Optional[int] = 600,
     reasoning_effort: str = "minimal",
 ) -> Optional[str]:
     """
     Chama LLM com fallback automático: OpenAI (rápido, confiável) → Groq.
-    max_tokens: teto de completion tokens (padrão 600 — suficiente para JSON de imóvel).
-    reasoning_effort: "minimal" = menor esforço de raciocínio do gpt-5-nano (valores: minimal/low/medium/high).
+    max_tokens: teto de completion tokens. None = sem limite (modelo decide).
+              Padrão 600 — suficiente para JSON de imóvel.
+    reasoning_effort: "minimal" = menor esforço de raciocínio do gpt-5-nano.
     Retorna o texto da resposta ou None.
     """
     import time as _time
@@ -71,12 +72,14 @@ def _llm_chat(
     if openai_client is not None:
         _t0 = _time.monotonic()
         try:
-            response = openai_client.chat.completions.create(
+            kwargs = dict(
                 model="gpt-5-nano",
                 messages=messages,
                 reasoning_effort=reasoning_effort,
-                max_completion_tokens=max_tokens,
             )
+            if max_tokens is not None:
+                kwargs["max_completion_tokens"] = max_tokens
+            response = openai_client.chat.completions.create(**kwargs)
             _elapsed = _time.monotonic() - _t0
             choice = response.choices[0]
             text = choice.message.content or ""
