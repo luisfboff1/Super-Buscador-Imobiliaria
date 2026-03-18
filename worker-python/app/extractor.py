@@ -64,43 +64,60 @@ def _llm_chat(
     reasoning_effort: "minimal" = menor esforço de raciocínio do gpt-5-nano (valores: minimal/low/medium/high).
     Retorna o texto da resposta ou None.
     """
+    import time as _time
+
     # 1. Tentar OpenAI (confiável, sem truncamento)
     openai_client = _get_openai()
     if openai_client is not None:
+        _t0 = _time.monotonic()
         try:
-            # gpt-5-nano é reasoning: reasoning_effort="minimal" usa mínimo de thinking tokens.
-            # Valores suportados: minimal, low, medium, high ("none" não existe nesse modelo).
-            # max_completion_tokens evita gastos inesperados.
             response = openai_client.chat.completions.create(
                 model="gpt-5-nano",
                 messages=messages,
                 reasoning_effort=reasoning_effort,
                 max_completion_tokens=max_tokens,
             )
-            text = response.choices[0].message.content or ""
+            _elapsed = _time.monotonic() - _t0
+            choice = response.choices[0]
+            text = choice.message.content or ""
+            finish = choice.finish_reason
             usage = response.usage
             tokens_in = usage.prompt_tokens if usage else 0
             tokens_out = usage.completion_tokens if usage else 0
-            log.debug(f"[openai] OK (tokens: {tokens_in}→{tokens_out})")
+            log.info(f"[openai] finish={finish} tokens: {tokens_in}→{tokens_out} len={len(text)} time={_elapsed:.1f}s")
+            if not text:
+                log.warning(f"[openai] Resposta vazia (finish={finish}, tokens_out={tokens_out})")
             return text
         except Exception as openai_err:
-            log.warning(f"[openai] Falhou: {openai_err}")
+            _elapsed = _time.monotonic() - _t0
+            err_type = type(openai_err).__name__
+            log.warning(f"[openai] {err_type} após {_elapsed:.1f}s: {openai_err}")
+    else:
+        log.warning("[openai] OPENAI_API_KEY não configurada — pulando OpenAI")
 
     # 2. Fallback: Groq (grátis, mas trunca respostas longas)
+    _t0 = _time.monotonic()
     try:
         client = _get_groq()
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=messages,
         )
-        text = response.choices[0].message.content or ""
+        _elapsed = _time.monotonic() - _t0
+        choice = response.choices[0]
+        text = choice.message.content or ""
+        finish = choice.finish_reason
         usage = response.usage
         tokens_in = usage.prompt_tokens if usage else 0
         tokens_out = usage.completion_tokens if usage else 0
-        log.debug(f"[groq] OK (tokens: {tokens_in}→{tokens_out})")
+        log.info(f"[groq] finish={finish} tokens: {tokens_in}→{tokens_out} len={len(text)} time={_elapsed:.1f}s")
+        if not text:
+            log.warning(f"[groq] Resposta vazia (finish={finish}, tokens_out={tokens_out})")
         return text
     except Exception as groq_err:
-        log.warning(f"[groq] Também falhou: {groq_err}")
+        _elapsed = _time.monotonic() - _t0
+        err_type = type(groq_err).__name__
+        log.warning(f"[groq] {err_type} após {_elapsed:.1f}s: {groq_err}")
         return None
 
 

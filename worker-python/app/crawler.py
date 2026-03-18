@@ -663,14 +663,17 @@ def _find_pagination_in_dom(page, listing_url: str, base_hostname: str) -> Optio
 
 # Fallback — tentamos esses se o LLM não achar nada
 LISTING_CANDIDATES_SUFFIXES = [
-    # Venda
+    # Venda — wildcards (Sobressai/ImovelWeb-style)
+    "/imoveis/venda/-/-/-/-",
     "/imoveis/comprar",
     "/imoveis/venda",
     "/comprar",
     "/venda",
     "/imoveis?finalidade=venda",
     "/imoveis?tipo=venda",
-    # Aluguel
+    # Aluguel — wildcards
+    "/imoveis/aluguel/-/-/-/-",
+    "/imoveis/alugar/-/-/-/-",
     "/imoveis/alugar",
     "/imoveis/aluguel",
     "/alugar",
@@ -789,10 +792,11 @@ REGRAS:
                 {"role": "system", "content": "Você é um especialista em análise de sites imobiliários brasileiros. Retorne SOMENTE JSON válido, sem markdown."},
                 {"role": "user", "content": prompt},
             ],
+            max_tokens=1200,
         )
 
         if not answer:
-            progress("  LLM não retornou resposta")
+            progress("  ⚠️ LLM retornou resposta vazia (ver log [openai]/[groq] acima)")
             return None
 
         # Limpar resposta: remover markdown code blocks se existirem
@@ -828,7 +832,7 @@ REGRAS:
 
     except json_mod.JSONDecodeError as e:
         log.warning(f"LLM retornou JSON inválido: {e}")
-        # Tentar extrair URLs mesmo do texto mal-formatado
+        log.warning(f"LLM resposta bruta (primeiros 500 chars): {answer[:500] if answer else '<vazio>'}")
         return None
     except Exception as e:
         log.warning(f"LLM site analysis falhou: {e}")
@@ -951,6 +955,7 @@ def discover_property_urls(
     # 1b. Fallback: tentar URLs hardcoded se LLM não achou nada
     if not listing_urls:
         progress(f"  Fallback: testando URLs comuns...")
+        all_seen_links: set[str] = set()  # content-based dedup
         for suffix in LISTING_CANDIDATES_SUFFIXES:
             candidate = f"{base_url}{suffix}"
             progress(f"    Tentando: {candidate}")
@@ -968,8 +973,24 @@ def discover_property_urls(
             progress(f"    ↳ {len(links)} imóveis")
 
             if len(links) >= 1:
+                # Content-based dedup: skip if >80% of links already seen
+                links_set = set(links)
+                if all_seen_links:
+                    overlap = len(links_set & all_seen_links)
+                    if len(links_set) > 0 and overlap / len(links_set) > 0.8:
+                        progress(f"    ↳ Duplicada ({overlap}/{len(links_set)} links já vistos), pulando")
+                        continue
+                all_seen_links.update(links_set)
+
                 listing_urls.append(final_url)
                 listing_cache[final_url] = (page, links)
+                # Populate listing_tipos from suffix keyword
+                if "venda" in suffix or "comprar" in suffix:
+                    listing_tipos[final_url] = "venda"
+                elif "alug" in suffix or "locac" in suffix:
+                    listing_tipos[final_url] = "alugar"
+                else:
+                    listing_tipos[final_url] = "?"
 
     # Deduplicate listing URLs (já são URLs finais, mas por segurança)
     listing_urls = list(dict.fromkeys(listing_urls))
