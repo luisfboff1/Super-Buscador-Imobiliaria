@@ -280,7 +280,7 @@ def fetch_page_with_scroll(url: str, max_scrolls: int = 50,
 
 
 def fetch_page_with_js_pagination(
-    url: str, base_hostname: str, max_pages: int = 50,
+    url: str, base_hostname: str, max_pages: int = 100,
     on_progress: Optional[Callable] = None,
 ) -> set:
     """
@@ -395,7 +395,7 @@ def fetch_page_with_js_pagination(
                 collected_links.add(l)
 
             if pg % 5 == 0:
-                progress(f"    📄 JS paginação: pág {pg}, +{len(new_links)} novos (total: {len(collected_links)})")
+                progress(f"    📄 JS paginação: pág {pg}, +{len(new_links)} novos ({len(collected_links)} nesta listagem)")
 
             # Se 2 páginas consecutivas sem novos, parar
             if not new_links:
@@ -408,7 +408,7 @@ def fetch_page_with_js_pagination(
                 if not new2:
                     break
 
-        progress(f"    📄 JS paginação concluída: {pg} páginas, {len(collected_links)} links")
+        progress(f"    📄 JS paginação concluída: {pg} páginas, {len(collected_links)} links nesta listagem")
 
     try:
         log.info(f"Fetch com JS pagination: {url}")
@@ -1244,7 +1244,7 @@ def discover_property_urls(
                 if has_js_pagination:
                     progress(f"    📄 Detectado JS pagination — clicando páginas...")
                     js_links = fetch_page_with_js_pagination(
-                        listing_url, base_hostname, max_pages=50, on_progress=progress
+                        listing_url, base_hostname, max_pages=100, on_progress=progress
                     )
                     new_js = [l for l in js_links if l not in all_detail_urls]
                     for l in js_links:
@@ -1258,7 +1258,7 @@ def discover_property_urls(
                     if page1_links:
                         progress(f"    🔄 JS pagination dinâmica (last resort)...")
                         js_links_lr = fetch_page_with_js_pagination(
-                            listing_url, base_hostname, max_pages=50, on_progress=progress
+                            listing_url, base_hostname, max_pages=100, on_progress=progress
                         )
                         new_js_lr = [l for l in js_links_lr if l not in all_detail_urls]
                         if new_js_lr:
@@ -1476,7 +1476,7 @@ def discover_property_urls(
         if not used_llm_hint and useful_pages <= 1 and p1_page:
             progress(f"    ⚠️ Template URL sem novos resultados (session-based?), tentando JS pagination...")
             js_links_sf = fetch_page_with_js_pagination(
-                listing_url, base_hostname, max_pages=50, on_progress=progress
+                listing_url, base_hostname, max_pages=100, on_progress=progress
             )
             new_js_sf = [l for l in js_links_sf if l not in all_detail_urls]
             if new_js_sf:
@@ -1620,7 +1620,7 @@ def discover_property_urls(
                 if _js_pag_found:
                     progress(f"    📄 Detectado JS pagination (fallback) — clicando páginas...")
                     js_links = fetch_page_with_js_pagination(
-                        listing_url, base_hostname, max_pages=50, on_progress=progress
+                        listing_url, base_hostname, max_pages=100, on_progress=progress
                     )
                     new_js = [l for l in js_links if l not in all_detail_urls]
                     for l in js_links:
@@ -1630,7 +1630,7 @@ def discover_property_urls(
                     # Último recurso: tentar JS pagination e scroll sem detecção prévia
                     progress(f"    🔄 JS pagination dinâmica (last resort)...")
                     js_links_lr2 = fetch_page_with_js_pagination(
-                        listing_url, base_hostname, max_pages=50, on_progress=progress
+                        listing_url, base_hostname, max_pages=100, on_progress=progress
                     )
                     new_js_lr2 = [l for l in js_links_lr2 if l not in all_detail_urls]
                     if new_js_lr2:
@@ -1730,8 +1730,13 @@ def _detect_page2_url(
                 if p2:
                     links = extract_detail_links(p2, base_hostname)
                     if links:
-                        log.info(f"    ✓ LLM hint funcionou: {len(links)} imóveis")
-                        return hint_page2
+                        # Validar que pág 2 tem itens DIFERENTES da pág 1
+                        p2_new = [l for l in links if l not in _p1]
+                        if p2_new:
+                            log.info(f"    ✓ LLM hint funcionou: {len(links)} imóveis (+{len(p2_new)} novos)")
+                            return hint_page2
+                        else:
+                            log.info(f"    ✗ LLM hint: {len(links)} imóveis mas todos iguais à pág 1 — site ignora parâmetro")
             if hint_param:
                 sep = "&" if "?" in listing_url else "?"
                 probe = f"{listing_url}{sep}{hint_param}=2"
@@ -1804,7 +1809,7 @@ def _detect_page2_url(
     # 3. Probe: tentar padrões comuns de query string (ANTES de path-based)
     # Query params são mais confiáveis que path append, que pode confundir
     # filtros de tipo (/imoveis/2/ = tipo, não página) com paginação.
-    for param in ["page", "pagina", "pagination", "pag", "pg"]:
+    for param in ["pagination", "page", "pagina", "pag", "pg"]:
         sep = "&" if "?" in listing_url else "?"
         probe_url = f"{listing_url}{sep}{param}=2"
         log.debug(f"  Probe query ({param}): {probe_url}")
@@ -1960,7 +1965,7 @@ def _url_to_template(page2_url: str, page_num: int = 2, listing_url: Optional[st
     # ── FASE 2: Fallbacks por nome de param (sem listing_url) ────────────────
 
     # Query-based — nomes tradicionais de paginação
-    known_params = ["pagina", "page", "pag", "pg", "pagination", "p",
+    known_params = ["pagination", "pagina", "page", "pag", "pg", "p",
                     "start", "offset", "inicio", "from"]
     for param in known_params:
         pattern = rf"([?&]{param}=)(\d+)(&|$)"
@@ -1970,7 +1975,7 @@ def _url_to_template(page2_url: str, page_num: int = 2, listing_url: Optional[st
             return re.sub(pattern, r"\g<1>{N}\g<3>", page2_url, flags=re.I)
 
     # Path-based — /pagina/2/, /page/2/, etc.
-    path_params = ["pagina", "page", "pag", "pg"]
+    path_params = ["pagination", "pagina", "page", "pag", "pg"]
     for param in path_params:
         pattern = rf"(/{param}/){pn}(/|$)"
         if re.search(pattern, page2_url, re.I):

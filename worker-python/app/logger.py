@@ -67,11 +67,23 @@ def setup_logging() -> None:
     except Exception:
         pass  # Don't crash if file logging fails
     
-    # Silencia bibliotecas ruidosas
-    logging.getLogger("urllib3").setLevel(logging.WARNING)
-    logging.getLogger("scrapling").setLevel(logging.INFO)
-    logging.getLogger("playwright").setLevel(logging.WARNING)
-    logging.getLogger("httpx").setLevel(logging.WARNING)
+    # Silencia bibliotecas ruidosas — evita linhas duplicadas de "Fetched (200)"
+    # scrapling/httpx chamam logging.basicConfig() que cria handler extra no root;
+    # setando WARNING, as msgs INFO do scrapling nem são criadas.
+    for noisy in ("urllib3", "scrapling", "playwright", "httpx", "httpcore",
+                  "hpack", "httpx._client", "asyncio"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+    # Proteção extra: se alguma lib adicionou handler ao root depois do nosso
+    # cleanup (via basicConfig), remove todos exceto os nossos.
+    _our_handlers = {id(handler)}
+    try:
+        _our_handlers.add(id(fh))
+    except NameError:
+        pass
+    for h in root.handlers[:]:
+        if id(h) not in _our_handlers:
+            root.removeHandler(h)
 
 
 def get_logger(name: str) -> logging.Logger:
