@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "brv": {
+      "type": "stdio",
+      "command": "brv",
+      "args": [
+        "mcp"
+      ],
+      "env": {}
+    }
+  }
+}
