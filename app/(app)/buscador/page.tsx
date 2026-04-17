@@ -73,6 +73,7 @@ type Filtros = {
   vagas: string;
   areaMin: string;
   areaMax: string;
+  sortBy: "relevante" | "preco_asc" | "preco_desc" | "area_desc" | "recentes";
 };
 
 function formatPreco(v: string | null) {
@@ -198,6 +199,7 @@ export default function BuscadorPage() {
     vagas: "",
     areaMin: "",
     areaMax: "",
+    sortBy: "relevante",
   });
   const [busca, setBusca] = useState("");
   const [buscando, setBuscando] = useState(false);
@@ -222,20 +224,21 @@ export default function BuscadorPage() {
     });
   }
 
-  async function fetchPage(targetPage: number) {
+  async function fetchPage(targetPage: number, filtrosAtuais: Filtros = filtros) {
     setBuscando(true);
     try {
       const params = new URLSearchParams();
-      if (filtros.tipo) params.set("tipo", filtros.tipo);
-      if (filtros.transacao) params.set("transacao", filtros.transacao);
-      if (filtros.cidade) params.set("cidade", filtros.cidade);
-      if (filtros.bairro) params.set("bairro", filtros.bairro);
-      if (filtros.precoMin) params.set("precoMin", filtros.precoMin);
-      if (filtros.precoMax) params.set("precoMax", filtros.precoMax);
-      if (filtros.quartos) params.set("quartosMin", filtros.quartos);
-      if (filtros.vagas) params.set("vagasMin", filtros.vagas);
-      if (filtros.areaMin) params.set("areaMin", filtros.areaMin);
-      if (filtros.areaMax) params.set("areaMax", filtros.areaMax);
+      if (filtrosAtuais.tipo) params.set("tipo", filtrosAtuais.tipo);
+      if (filtrosAtuais.transacao) params.set("transacao", filtrosAtuais.transacao);
+      if (filtrosAtuais.cidade) params.set("cidade", filtrosAtuais.cidade);
+      if (filtrosAtuais.bairro) params.set("bairro", filtrosAtuais.bairro);
+      if (filtrosAtuais.precoMin) params.set("precoMin", filtrosAtuais.precoMin);
+      if (filtrosAtuais.precoMax) params.set("precoMax", filtrosAtuais.precoMax);
+      if (filtrosAtuais.quartos) params.set("quartosMin", filtrosAtuais.quartos);
+      if (filtrosAtuais.vagas) params.set("vagasMin", filtrosAtuais.vagas);
+      if (filtrosAtuais.areaMin) params.set("areaMin", filtrosAtuais.areaMin);
+      if (filtrosAtuais.areaMax) params.set("areaMax", filtrosAtuais.areaMax);
+      if (filtrosAtuais.sortBy) params.set("sortBy", filtrosAtuais.sortBy);
       if (busca) params.set("q", busca);
       params.set("page", String(targetPage));
 
@@ -508,12 +511,20 @@ export default function BuscadorPage() {
               <select
                 className="form-input"
                 style={{ width: "auto", fontSize: "12.5px", padding: "6px 10px" }}
+                value={filtros.sortBy}
+                onChange={(e) => {
+                  const sortBy = e.target.value as Filtros["sortBy"];
+                  setFiltros((prev) => ({ ...prev, sortBy }));
+                  if (resultado !== null) {
+                    void fetchPage(1, { ...filtros, sortBy });
+                  }
+                }}
               >
-                <option>Mais relevante</option>
-                <option>Menor preço</option>
-                <option>Maior preço</option>
-                <option>Maior área</option>
-                <option>Mais recente</option>
+                <option value="relevante">Mais relevante</option>
+                <option value="preco_asc">Menor preço</option>
+                <option value="preco_desc">Maior preço</option>
+                <option value="area_desc">Maior área</option>
+                <option value="recentes">Mais recente</option>
               </select>
             </div>
 

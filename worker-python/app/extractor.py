@@ -400,12 +400,35 @@ def _extract_preco(text: str) -> Optional[float]:
 
 def _extract_area(text: str) -> Optional[float]:
     """Extrai área em m²."""
-    m = re.search(r"([\d.,]+)\s*m[²2]", text)
-    if m:
+    candidates = []
+    for m in re.finditer(r"(\d[\d.,]*)\s*m[²2]", text):
         try:
-            return float(m.group(1).replace(".", "").replace(",", "."))
+            area = float(m.group(1).replace(".", "").replace(",", "."))
         except ValueError:
-            pass
+            continue
+
+        if area <= 10 or area > 100_000:
+            continue
+
+        start = max(0, m.start() - 48)
+        end = min(len(text), m.end() + 48)
+        context = text[start:end]
+
+        score = 0
+        if re.search(r"(área|area|privativa|útil|util|total|construída|construida|metr)", context):
+            score += 4
+        if re.search(r"(condomínio|condominio|empreendimento|lazer|salão|salao|academia)", context):
+            score -= 3
+        if m.start() < 2500:
+            score += 2
+        if area >= 40:
+            score += 1
+
+        candidates.append((score, m.start(), area))
+
+    if candidates:
+        candidates.sort(key=lambda item: (-item[0], item[1]))
+        return candidates[0][2]
     return None
 
 

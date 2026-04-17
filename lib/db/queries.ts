@@ -1,4 +1,4 @@
-import { count, eq, desc, and, gte, lte, ilike, sql, or } from "drizzle-orm";
+import { count, eq, desc, asc, and, gte, ilike, sql, or } from "drizzle-orm";
 import { db, tenantSchema, authSchema } from "@/lib/db";
 
 // ─── STATS ────────────────────────────────────────────────────────────────────
@@ -119,6 +119,7 @@ export type FiltrosImoveis = {
   areaMax?: number;
   quartosMin?: number;
   vagasMin?: number;
+  sortBy?: "relevante" | "preco_asc" | "preco_desc" | "area_desc" | "recentes";
   page?: number;
   pageSize?: number;
 };
@@ -162,6 +163,14 @@ export async function searchImoveis(filtros: FiltrosImoveis = {}) {
     conditions.push(gte(tenantSchema.imoveis.vagas, filtros.vagasMin));
 
   const whereClause = and(...conditions);
+  const orderBy =
+    filtros.sortBy === "preco_asc"
+      ? [asc(sql`${tenantSchema.imoveis.preco}::numeric`), desc(tenantSchema.imoveis.createdAt)]
+      : filtros.sortBy === "preco_desc"
+        ? [desc(sql`${tenantSchema.imoveis.preco}::numeric`), desc(tenantSchema.imoveis.createdAt)]
+        : filtros.sortBy === "area_desc"
+          ? [desc(sql`${tenantSchema.imoveis.areaM2}::numeric`), desc(tenantSchema.imoveis.createdAt)]
+          : [desc(tenantSchema.imoveis.createdAt)];
 
   const [{ total }] = await db
     .select({ total: count() })
@@ -195,7 +204,7 @@ export async function searchImoveis(filtros: FiltrosImoveis = {}) {
       eq(tenantSchema.imoveis.fonteId, tenantSchema.fontes.id)
     )
     .where(whereClause)
-    .orderBy(desc(tenantSchema.imoveis.createdAt))
+    .orderBy(...orderBy)
     .limit(PAGE_SIZE)
     .offset(offset);
 
