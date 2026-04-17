@@ -1,0 +1,1 @@
+Fonte reset-crawl is a destructive delete-then-resync flow requiring explicit user confirmation, polling /status every 2.5s for up to 60 minutes, with stall detection after 2 minutes unless a recent heartbeat exists.

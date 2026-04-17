@@ -1,0 +1,1 @@
+Reset-crawl per fonte adds a destructive “Apagar e buscar” flow that confirms deletion of all source imóveis, restarts crawling, and reuses status polling with heartbeat and stall safeguards.

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { RefreshCw, Settings, Check, AlertCircle, Search, Zap, Loader2 } from "lucide-react";
+import { RefreshCw, Settings, Check, AlertCircle, Search, Zap, Loader2, RotateCcw } from "lucide-react";
 
 interface CrawlProgress {
   fase: string;
@@ -32,6 +32,7 @@ const FASE_LABELS: Record<string, { icon: React.ReactNode; label: string }> = {
 export function FonteActions({ fonteId, status }: FonteActionsProps) {
   const router = useRouter();
   const [syncing, setSyncing] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const [progress, setProgress] = useState<CrawlProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -98,6 +99,7 @@ export function FonteActions({ fonteId, status }: FonteActionsProps) {
           // Aguarda 4s mostrando o resultado final, depois reseta
           setTimeout(() => {
             setSyncing(false);
+            setResetting(false);
             setProgress(null);
             router.refresh();
           }, 4000);
@@ -108,6 +110,7 @@ export function FonteActions({ fonteId, status }: FonteActionsProps) {
         setError(data.erro || "Erro desconhecido");
         stopPolling();
         setSyncing(false);
+        setResetting(false);
       }
     } catch {
       // Silently retry on next poll
@@ -135,6 +138,7 @@ export function FonteActions({ fonteId, status }: FonteActionsProps) {
 
   async function handleSincronizar() {
     setSyncing(true);
+    setResetting(false);
     setError(null);
     setProgress(null);
 
@@ -159,6 +163,41 @@ export function FonteActions({ fonteId, status }: FonteActionsProps) {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erro de rede");
       setSyncing(false);
+    }
+  }
+
+  async function handleResetAndSync() {
+    const confirmed = window.confirm(
+      "Isso vai apagar todos os imóveis dessa URL e iniciar uma nova busca. Continuar?"
+    );
+    if (!confirmed) return;
+
+    setSyncing(true);
+    setResetting(true);
+    setError(null);
+    setProgress(null);
+
+    try {
+      const res = await fetch(`/api/fontes/${fonteId}/reset-crawl`, {
+        method: "POST",
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        setError(data.error || "Erro ao reiniciar busca");
+        setSyncing(false);
+        setResetting(false);
+        return;
+      }
+
+      pollStartRef.current = Date.now();
+      lastProgressRef.current = null;
+      pollRef.current = setInterval(pollStatus, 2500);
+      setTimeout(pollStatus, 1000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erro de rede");
+      setSyncing(false);
+      setResetting(false);
     }
   }
 
@@ -243,6 +282,16 @@ export function FonteActions({ fonteId, status }: FonteActionsProps) {
             : status === "erro"
             ? "Tentar novamente"
             : "Sincronizar"}
+        </button>
+        <button
+          className="btn btn-outline btn-sm"
+          style={{ flex: 1, justifyContent: "center" }}
+          onClick={handleResetAndSync}
+          disabled={syncing}
+          title="Apaga os imóveis atuais dessa fonte e faz uma nova busca"
+        >
+          <RotateCcw size={13} />
+          {syncing && resetting ? "Limpando..." : "Apagar e buscar"}
         </button>
         <button
           className="btn btn-ghost btn-sm"

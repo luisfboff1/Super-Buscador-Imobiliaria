@@ -1,96 +1,192 @@
 ---
-children_hash: 4c8d73562a1515a5eeccd332353bfca2f098c0d5fd6ba667f97d8619f5ee619d
-compression_ratio: 0.5310124049619848
+children_hash: d28492e0106ad3baff5fafa9c1569f05ad76fe08afdb93dbcbb8bbbabe23d5ad
+compression_ratio: 0.43133129303749046
 condensation_order: 1
-covers: [benchmark_timing_breakdown_and_doppler_run_validation.md, context.md, shadow_mode_benchmark_reliability.md]
-covers_token_total: 2499
+covers: [benchmark_timing_breakdown_and_doppler_run_validation.md, buscador_sort_and_extractor_refinements.md, context.md, reset_crawl_flow_per_source.md, shadow_mode_benchmark_reliability.md]
+covers_token_total: 5228
 summary_level: d1
-token_count: 1327
+token_count: 2255
 type: summary
 ---
 # web_scraping
 
-Structural overview of local shadow-mode benchmark reliability and timing instrumentation for the web scraping pipeline. The topic centers on how `worker-python/main.py` and related benchmark components were adjusted to make benchmark runs reproducible, diagnosable, and comparable across legacy vs candidate extraction paths.
+## Overview
+This topic centers on the web scraping pipeline’s reliability, benchmark instrumentation, search/query integration, extractor evolution, and source reset operations. The entries show a progression from making local/shadow-mode benchmarking reliable, to adding stage-level timing visibility, to refining extraction/search behavior, and finally to adding destructive-but-safe recrawl operations per fonte.
 
-## Topic Scope
-From `context.md`:
-- Focuses on shadow mode benchmarks, environment loading, Neon connection fallback, and discovery/extraction benchmark evidence.
-- Connects operational reliability changes with benchmark outcomes.
-- Related to `facts/project` for broader repository facts.
+For topic framing, see `context.md`. For benchmark continuity, `benchmark_timing_breakdown_and_doppler_run_validation.md` builds directly on `shadow_mode_benchmark_reliability.md`. Operational source lifecycle behavior is covered separately in `reset_crawl_flow_per_source.md`. Search/extractor product behavior is covered in `buscador_sort_and_extractor_refinements.md`.
 
-## Key Entries
+## Core Architecture Themes
+
+- **Benchmark reliability and observability**
+  - `shadow_mode_benchmark_reliability.md` established local benchmark execution support in:
+    - `worker-python/main.py`
+    - `worker-python/app/db.py`
+    - `.env.local`
+  - `benchmark_timing_breakdown_and_doppler_run_validation.md` extended this into **stage-level timing instrumentation** inside `worker-python/main.py` and related benchmark/crawler/extractor modules.
+  - Key architectural direction:
+    - run benchmarks under a controlled environment
+    - persist benchmark runs/comparisons
+    - compare **legacy vs candidate** pipelines
+    - decide readiness based on **speed + data quality**, not latency alone
+
+- **Extractor pipeline evolution**
+  - `buscador_sort_and_extractor_refinements.md` documents the extraction cascade:
+    - **JSON-LD -> Regex -> LLM**
+  - It also introduces more deterministic extraction through:
+    - contextual `area_m2` scoring in `worker-python/app/extractor.py`
+    - `SiteTemplate` selector learning with confirmation votes and readiness thresholds
+  - This connects to the benchmark entries, where reduced or eliminated LLM calls are a major success criterion.
+
+- **Search/API/database integration**
+  - `buscador_sort_and_extractor_refinements.md` spans:
+    - `app/(app)/buscador/page.tsx`
+    - `app/api/imoveis/route.ts`
+    - `lib/db/queries.ts`
+  - Architectural pattern:
+    - UI state -> authenticated API parsing/validation -> SQL filter/order application -> paginated results
+  - Added end-to-end support for:
+    - `bairro`
+    - `areaMin`
+    - `areaMax`
+    - `sortBy`
+
+- **Fonte lifecycle control**
+  - `reset_crawl_flow_per_source.md` adds a destructive reset path for a fonte:
+    - delete all imóveis for a fonte
+    - restart crawl
+    - reuse existing polling/status infrastructure
+  - This creates a clear operational split between:
+    - normal sync
+    - reset-and-resync
+
+## Entry Relationships
 
 ### `shadow_mode_benchmark_reliability.md`
-Primary reliability baseline for local benchmark execution.
+Foundational reliability entry for local/shadow benchmark execution.
 
-- **Entrypoint/environment behavior**
-  - `worker-python/main.py` loads `.env.local` in addition to `.env` so the benchmark CLI works from repo root.
-  - `worker-python/app/db.py` retries with `DATABASE_URL_UNPOOLED` when pooled Neon connections fail via `psycopg2`.
-- **Execution flow**
-  - Benchmark CLI start → load `.env`/`.env.local` → connect with `DATABASE_URL` or fallback `DATABASE_URL_UNPOOLED` → create benchmark tables on Neon → run discovery/extraction comparisons → persist run/comparison IDs.
-- **Verified benchmark target**
-  - Fonte ID: `ad023d50-3350-4ad8-b741-2622be26f131` (Imobiliaria Connect).
-- **Observed results**
-  - Discovery: candidate found 41 detail URLs vs 40 for legacy, with 40 overlap.
-  - Extraction sample size 5: candidate produced 4 approved / 1 warn with `0` LLM calls; legacy produced 5 warn with `5` LLM calls.
-- **Environment risks**
-  - `.env.local` has malformed Doppler command lines near lines 35–37.
-  - Current `OPENAI_API_KEY` is invalid, degrading LLM fallback benchmarking.
-
-Use this entry for the original reliability fixes, Neon fallback behavior, and first persisted benchmark evidence.
+- Main decisions:
+  - `worker-python/main.py` loads `.env.local` in addition to `.env` for repo-root benchmark CLI execution.
+  - `worker-python/app/db.py` falls back from `DATABASE_URL` to `DATABASE_URL_UNPOOLED` when pooled Neon connections fail via `psycopg2`.
+- Benchmark evidence captured for fonte `ad023d50-3350-4ad8-b741-2622be26f131` (Imobiliaria Connect).
+- Observed early benchmark outcomes:
+  - discovery: candidate 41 URLs vs legacy 40, overlap 40
+  - extraction sample size 5: candidate 4 approved / 1 warn / 0 LLM calls vs legacy 5 warn / 5 LLM calls
+- Environment caveats:
+  - malformed Doppler command lines in `.env.local` near lines 35–37
+  - invalid `OPENAI_API_KEY` degrades LLM fallback benchmarking
 
 ### `benchmark_timing_breakdown_and_doppler_run_validation.md`
-Follow-up instrumentation and validation entry that deepens benchmark observability and tightens Doppler-run correctness.
+Detailed instrumentation and validation follow-up to the shadow-mode reliability work.
 
-- **Instrumentation added**
-  - Named timing breakdown storage in benchmark metrics/models.
-  - Discovery timing fields: `discovery_structure_ms`, `discovery_pagination_ms`.
-  - Extraction timing fields: `extract_images_ms`, `extract_jsonld_ms`, `extract_regex_ms`, `extract_llm_ms`.
-  - Legacy runner timing capture: `fetch_html_ms`, `validation_ms`, `enrichment_ms`.
-  - Markdown comparison output now includes elapsed totals and timing breakdowns.
-- **Environment loading change**
-  - `worker-python/main.py` now skips `.env.local` loading when Doppler-related environment variables are already present, preventing local overrides during `doppler run`.
-- **Execution flow**
-  - Run benchmark under Doppler → capture discovery/extraction stage timings → aggregate per-item timing breakdowns → compare legacy vs candidate → assess speed gains against data regressions.
-- **Validated benchmark results for the same fonte**
-  - Discovery parity: both pipelines found `1156` URLs.
-  - Discovery elapsed:
+- Adds named timing breakdown capture across:
+  - discovery structure
+  - discovery pagination
+  - extraction image stage
+  - extraction JSON-LD stage
+  - extraction regex stage
+  - extraction LLM stage
+  - legacy fetch/validation/enrichment
+- Reporting enhancements:
+  - benchmark models and metrics store `timing_breakdown`
+  - Markdown comparison reports now include elapsed totals and breakdowns
+- Environment handling changed again:
+  - `worker-python/main.py` skips `.env.local` loading when Doppler-related variables are already present, to avoid overriding `doppler run`
+- Validated results for the same fonte `ad023d50-3350-4ad8-b741-2622be26f131`:
+  - discovery parity: **1156 URLs** for both pipelines
+  - elapsed:
     - legacy `699437ms`
     - candidate `694655ms`
-  - Discovery cost breakdown:
-    - structure work ≈ `40s`
-    - pagination work ≈ `655s` dominant cost
-  - Extraction sample size 10:
+  - discovery cost dominated by:
+    - ~40s structure work
+    - ~655s pagination work
+  - extraction sample of 10:
     - legacy `36782ms`, `10` LLM calls
     - candidate `3466ms`, `0` LLM calls
-    - both produced `9 approved` / `1 warn`
-- **Architectural conclusion**
-  - Candidate extraction is much faster and avoids LLM usage, but still regresses on fields like `quartos` and `banheiros` and shows a suspicious `bairro` mismatch, so it is **not yet ready** to replace legacy extraction.
+- Readiness conclusion:
+  - despite speedups, candidate still regresses on fields like `quartos`, `banheiros`, and shows suspicious `bairro` mismatch
+  - candidate is **not yet safe** to replace legacy extraction
 
-Use this entry for stage-level timing architecture, Doppler-specific environment handling, and the updated readiness assessment.
+### `buscador_sort_and_extractor_refinements.md`
+Connects product search behavior with extraction/template-learning refinements.
 
-## Cross-Entry Relationships
+- Search stack:
+  - `app/(app)/buscador/page.tsx`
+  - `app/api/imoveis/route.ts`
+  - `lib/db/queries.ts`
+- Sorting/filtering additions:
+  - accepted `sortBy` values:
+    - `relevante`
+    - `preco_asc`
+    - `preco_desc`
+    - `area_desc`
+    - `recentes`
+  - page size fixed at `12`
+  - `relevante` and `recentes` currently map to the same backend ordering: `createdAt desc`
+- Numeric parsing:
+  - API uses Brazilian-number parsing for price and area filters
+  - `parseBRNumber` removes thousand separators, converts decimal commas to dots, returns `undefined` if invalid
+- Extractor refinements:
+  - `_extract_area` uses contextual candidate scoring
+  - rejects area values `<= 10` or `> 100_000`
+  - favors nearby terms such as área/privativa/construída
+  - penalizes condomínio/empreendimento/lazer context
+- Preserved regex/pattern decisions:
+  - `r\$\s*([\d.,]+)` for price extraction
+  - `(\d[\d.,]*)\s*m[²2]` for area candidates
+  - `\bno\s+bairro\s+([^,\-\(]+?)\s+em\s` for bairro extraction
+- `SiteTemplate` learning:
+  - uses early sample pages (`LEARN_PAGES=5`)
+  - confirms selectors with votes and semantic validation
+  - prevents two confirmed fields from sharing a selector
+  - becomes ready only when core data exists (at least one of `titulo` or `preco`) and minimum confirmed fields threshold is met
+- LLM detail:
+  - extractor fallback model is `gpt-5-nano` with minimal reasoning
 
-- `benchmark_timing_breakdown_and_doppler_run_validation.md` explicitly relates to `shadow_mode_benchmark_reliability.md`.
-- Together they describe an evolution:
-  1. **Reliability enablement**: make local/Neon-backed benchmark execution work consistently.
-  2. **Instrumentation expansion**: expose stage-level costs in discovery, extraction, and legacy enrichment.
-  3. **Decision support**: use persisted comparisons to evaluate whether the candidate extractor can replace legacy.
+### `reset_crawl_flow_per_source.md`
+Operational control entry for destructive recrawl per fonte.
 
-## Stable Architectural Decisions
+- Files:
+  - `components/fontes/FonteActions.tsx`
+  - `lib/db/queries.ts`
+  - `app/api/fontes/[id]/reset-crawl/route.ts`
+- Main flow:
+  - user clicks **"Apagar e buscar"**
+  - UI requests explicit confirmation
+  - backend deletes all imóveis for the selected fonte via `deleteImoveisByFonteId`
+  - crawl restarts
+  - UI polls `/api/fontes/${fonteId}/status`
+- Polling/reliability behavior:
+  - polling interval: `2500ms`
+  - first status read after `1000ms`
+  - max crawl window: `60 minutes`
+  - stall detection after `2 minutes` without progress unless `heartbeatAt` indicates worker liveness
+- UI state model:
+  - separate `syncing` and `resetting` flags
+  - reset mode changes button label from `"Apagar e buscar"` to `"Limpando..."`
+  - on success, preserve final result briefly then clear state and `router.refresh()`
+- Important operational rule:
+  - reset-crawl is intentionally destructive and gated by explicit confirmation:
+    - `"Isso vai apagar todos os imóveis dessa URL e iniciar uma nova busca. Continuar?"`
 
-- Benchmarking depends on the Python worker path, especially `worker-python/main.py`.
-- Database connectivity for benchmark persistence must tolerate pooled Neon failures via fallback to `DATABASE_URL_UNPOOLED`.
-- Environment loading behavior differs by mode:
-  - local repo-root CLI runs benefit from `.env.local` loading
-  - Doppler-backed runs must avoid `.env.local` overrides when Doppler env vars are present
-- Benchmark comparisons should report not only total elapsed time but also stage-level timing breakdowns.
-- Candidate extractor evaluation must consider both speed/LLM reduction and field-quality regressions before replacement.
+## Cross-Cutting Patterns
 
-## Current Project Pattern
-A consistent pattern emerges across both entries:
-- improve benchmark execution reliability
-- persist real run/comparison IDs for traceability
-- compare candidate vs legacy on discovery and extraction
-- reduce LLM dependence where possible
-- block rollout until data quality matches or exceeds legacy behavior
+- **Legacy vs candidate benchmarking** is the main validation mechanism for scraper changes.
+- **LLM elimination/reduction** is a repeated optimization target, but benchmark results must still preserve field quality.
+- **Environment correctness matters**:
+  - `.env.local` loading helped local CLI runs
+  - Doppler-backed runs later required skipping `.env.local` when Doppler vars are present
+- **Discovery remains pagination-bound** according to timing breakdowns; extraction optimizations alone do not address total crawl cost.
+- **Search and extraction are converging**:
+  - UI/API/query ordering/filter logic and extractor/template learning are being refined together to improve end-user relevance and scrape quality.
+- **Operational safety** is handled through explicit confirmation, heartbeat-aware polling, and reuse of existing crawl status infrastructure.
+
+## Drill-Down Guide
+
+- For benchmark setup reliability and Neon fallback behavior:
+  - `shadow_mode_benchmark_reliability.md`
+- For stage-level timing metrics, Doppler-run validation, and candidate readiness limits:
+  - `benchmark_timing_breakdown_and_doppler_run_validation.md`
+- For search sorting/filter propagation, Brazilian numeric parsing, area extraction, and `SiteTemplate` learning:
+  - `buscador_sort_and_extractor_refinements.md`
+- For destructive fonte reset/resync flow and polling safeguards:
+  - `reset_crawl_flow_per_source.md`

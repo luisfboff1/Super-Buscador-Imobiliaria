@@ -1,41 +1,85 @@
 ---
-children_hash: 3744bfe495f2e3ae721bce3ca56b5ff529d416e8424e8d3514a83a3139be768e
-compression_ratio: 0.8499095840867993
+children_hash: ce41866d63d435d4b418de51265b50ff5b6aa626d304e22897e0a22863f36462
+compression_ratio: 0.5561015561015561
 condensation_order: 2
 covers: [context.md, project/_index.md]
-covers_token_total: 553
+covers_token_total: 1221
 summary_level: d2
-token_count: 470
+token_count: 679
 type: summary
 ---
-# Facts / Project
+# facts
+
+## Purpose and Scope
+The `facts` domain stores stable, repository-wide operational knowledge rather than feature implementation detail. It is meant for persistent technical choices, environment/tooling facts, and baseline behaviors that future work can rely on.
+
+## Primary Topic: `project`
+`facts/project` groups durable project facts into two main clusters:
+
+- local ByteRover knowledge persistence after reset
+- fonte reset-crawl operational constraints
+
+See `project/_index.md` for the synthesized topic map.
 
 ## Structural Overview
-The `facts` domain holds stable, repository-wide operational knowledge. Within it, the `project` topic currently centers on one persistent infrastructure fact: curated knowledge for Super-Buscador-Imobiliaria is stored in the repository-local `.brv/context-tree/`, including after reset-related workflows.
 
-## Domain Scope
-From `context.md`:
-- Intended for durable project facts, environment details, and repository-wide technical/operational knowledge.
-- Includes stable tooling and persistence facts useful across the repo.
-- Excludes feature-specific implementation details and short-lived task planning.
+### 1. Repository-local knowledge persistence
+Covered by:
+- `project/context.md`
+- `project/repository_local_context_tree_reset.md`
 
-## Topic Structure
-From `project/_index.md`, the `project` topic condenses:
-- `context.md` — topic/domain framing for repository-local context storage and persistence behavior.
-- `repository_local_context_tree_reset.md` — canonical fact record for reset-related persistence behavior.
+Key fact:
+- The active curated knowledge store is the repository-local `.brv/context-tree/`.
 
-## Key Preserved Facts
-- The authoritative write target for curated knowledge is `.brv/context-tree/`.
-- Storage is repository-local, not an external system.
-- The reset-related persistence fact was explicitly recorded on `2026-03-29`.
-- Operational flow captured in `repository_local_context_tree_reset.md`:
-  - `reset -> ByteRover CLI writes -> repository-local .brv context tree persists curated knowledge`
+Baseline behavior:
+- On `2026-03-29`, ByteRover CLI persistence is recorded as:
+  - `reset -> ByteRover CLI writes -> local .brv/context-tree persists curated knowledge`
 
-## Dependencies and Conditions
-- The repository must contain a local `.brv` directory.
-- Curation flows depend on write access to `.brv/context-tree/`.
+Dependencies and constraints:
+- The repository must contain `.brv/`
+- The CLI must be able to write to the local context tree
 
-## Relationships
-- `facts/context.md` defines the domain’s purpose and boundaries.
-- `project/_index.md` summarizes the current `project` topic structure and points readers to `repository_local_context_tree_reset.md` for the detailed persistence artifact.
-- `repository_local_context_tree_reset.md` is the drill-down source for validating post-reset curation persistence behavior.
+Relationship:
+- `project/context.md` provides topic framing
+- `project/repository_local_context_tree_reset.md` is the authoritative drill-down for the dated persistence-location fact
+
+### 2. Fonte reset-crawl behavior
+Covered by:
+- `project/fonte_crawl_reset_constraints.md`
+
+Core architectural decision:
+- Reset-crawl is a destructive, single-fonte delete-then-resync flow.
+
+Operational flow:
+- confirm reset
+- call reset-crawl endpoint
+- delete imóveis for the fonte
+- start fresh synchronization
+- poll status until completion or error
+
+Key implementation references:
+- UI trigger: `components/fontes/FonteActions.tsx`
+- Backend route: `app/api/fontes/[id]/reset-crawl/route.ts`
+- Delete helper: `lib/db/queries.ts`
+- Deletion function: `deleteImoveisByFonteId`
+
+Behavioral constraints:
+- User confirmation uses `window.confirm`
+- Status polling endpoint: `/api/fontes/${fonteId}/status`
+- Polling cadence: `2500ms`
+- Maximum polling window: `60 minutes`
+- Stall fallback: `2 minutes` without progress unless backend heartbeat is still recent
+
+Runtime pattern:
+- Reset-crawl reuses the same progress polling model as normal synchronization
+
+## Cross-entry Patterns
+Across `facts/project`, the recurring pattern is operational baseline capture:
+- where durable state is stored
+- which file/route owns a workflow
+- what timing thresholds govern monitoring and recovery
+
+## Drill-down Map
+- Topic framing and scope: `project/context.md`
+- Local `.brv/context-tree` persistence fact: `project/repository_local_context_tree_reset.md`
+- Reset-crawl ownership, endpoint, file paths, and timing constraints: `project/fonte_crawl_reset_constraints.md`

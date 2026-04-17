@@ -418,3 +418,9 @@ export async function markImoveisIndisponiveis(fonteId: string, urlsAtivas: stri
       .where(eq(tenantSchema.imoveis.id, id));
   }
 }
+
+export async function deleteImoveisByFonteId(fonteId: string) {
+  await db
+    .delete(tenantSchema.imoveis)
+    .where(eq(tenantSchema.imoveis.fonteId, fonteId));
+}

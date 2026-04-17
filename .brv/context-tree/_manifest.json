@@ -1,15 +1,15 @@
 {
   "active_context": [
     {
-      "order": 3,
-      "path": "_index.md",
-      "tokens": 1352,
+      "order": 2,
+      "path": "facts/_index.md",
+      "tokens": 679,
       "type": "summary"
     },
     {
-      "order": 2,
-      "path": "facts/_index.md",
-      "tokens": 470,
+      "order": 1,
+      "path": "facts/project/_index.md",
+      "tokens": 1002,
       "type": "summary"
     },
     {
@@ -26,14 +26,22 @@
     },
     {
       "importance": 50,
+      "path": "architecture/web_scraping/buscador_sort_and_extractor_refinements.md",
+      "tokens": 1479,
+      "type": "context"
+    },
+    {
+      "importance": 50,
       "path": "architecture/web_scraping/context.md",
       "tokens": 108,
       "type": "context"
     },
     {
+      "abstractPath": "architecture/web_scraping/reset_crawl_flow_per_source.abstract.md",
+      "abstractTokens": 48,
       "importance": 50,
-      "path": "architecture/web_scraping/shadow_mode_benchmark_reliability.md",
-      "tokens": 1166,
+      "path": "architecture/web_scraping/reset_crawl_flow_per_source.md",
+      "tokens": 48,
       "type": "context"
     },
     {
@@ -49,19 +57,27 @@
       "type": "context"
     },
     {
+      "abstractPath": "facts/project/fonte_crawl_reset_constraints.abstract.md",
+      "abstractTokens": 54,
+      "importance": 50,
+      "path": "facts/project/fonte_crawl_reset_constraints.md",
+      "tokens": 54,
+      "type": "context"
+    },
+    {
       "importance": 50,
       "path": "facts/project/repository_local_context_tree_reset.md",
       "tokens": 369,
       "type": "context"
     }
   ],
-  "generated_at": "2026-03-31T14:28:23.657Z",
+  "generated_at": "2026-04-17T19:51:15.839Z",
   "lane_tokens": {
-    "contexts": 3239,
+    "contexts": 3654,
     "stubs": 0,
-    "summaries": 1822
+    "summaries": 1681
   },
-  "source_fingerprint": "edd9cdc3e61c772895cafabccfb36b3798c5d1f34e4560a3f2a48e06fd196e36",
-  "total_tokens": 5061,
+  "source_fingerprint": "d5d9548637d5b808f9191bb6a8641a29087d8663aed63a9a32819041132cb9f1",
+  "total_tokens": 5335,
   "version": 1
 }
