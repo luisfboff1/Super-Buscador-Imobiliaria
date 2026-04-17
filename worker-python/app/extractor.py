@@ -18,6 +18,7 @@ from typing import Optional
 from bs4 import BeautifulSoup
 from openai import OpenAI
 
+from app.benchmark_metrics import record_llm_call, timed_step
 from app.db import ImovelInput
 from app.logger import get_logger
 
@@ -55,6 +56,7 @@ def _llm_chat(
 
     _t0 = _time.monotonic()
     try:
+        record_llm_call()
         client = _get_openai()
         kwargs = dict(
             model="gpt-5-nano",
@@ -1527,7 +1529,8 @@ def extract_property_data(
     Retorna None se nada funcionar.
     """
     # Imagens via BS4 (sempre, independente do método)
-    imagens = extract_images(html)
+    with timed_step("extract_images_ms"):
+        imagens = extract_images(html)
 
     # 404 soft — usar word-boundary para evitar falso positivo em CDN paths (ex: /10404/property/)
     if re.search(r"(?<!\d)404(?!\d)|não encontrad|not found", html[:2000], re.I):
@@ -1683,13 +1686,15 @@ def extract_property_data(
     method_parts: list[str] = []
 
     # ── 1. JSON-LD (melhor cenário — grátis e perfeito) ──
-    jsonld_result = extract_from_json_ld(html, url)
+    with timed_step("extract_jsonld_ms"):
+        jsonld_result = extract_from_json_ld(html, url)
     if jsonld_result and (jsonld_result.titulo or jsonld_result.preco):
         result = jsonld_result
         method_parts.append("JSON-LD")
 
     # ── 2. Regex universal (preço, tipo, quartos, área, transação) ──
-    regex_result = extract_quick_regex(html, url)
+    with timed_step("extract_regex_ms"):
+        regex_result = extract_quick_regex(html, url)
     if regex_result:
         if result is None:
             result = regex_result
@@ -1710,7 +1715,8 @@ def extract_property_data(
         if template:
             template.llm_calls += 1
         log.info(f"  ⚡ {len(missing)} faltando ({', '.join(missing[:5])}) — LLM...")
-        llm_result = extract_via_llm(html, url)
+        with timed_step("extract_llm_ms"):
+            llm_result = extract_via_llm(html, url)
         if llm_result:
             if result is None:
                 result = llm_result

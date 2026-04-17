@@ -7,6 +7,7 @@ Mesmo banco, mesmas tabelas, queries compatíveis.
 
 import os
 import json
+import uuid
 from datetime import datetime
 from typing import Optional
 from contextlib import contextmanager
@@ -22,6 +23,17 @@ log = get_logger("db")
 # ─── Conexão ──────────────────────────────────────────────────────────────────
 
 _pool: Optional[PgConnection] = None
+
+
+def _database_url_candidates() -> list[tuple[str, str]]:
+    candidates: list[tuple[str, str]] = []
+    primary = os.environ.get("DATABASE_URL")
+    unpooled = os.environ.get("DATABASE_URL_UNPOOLED")
+    if primary:
+        candidates.append(("DATABASE_URL", primary))
+    if unpooled and unpooled != primary:
+        candidates.append(("DATABASE_URL_UNPOOLED", unpooled))
+    return candidates
 
 
 def _is_alive(conn: PgConnection) -> bool:
@@ -53,11 +65,22 @@ def get_conn() -> PgConnection:
                 pass
             need_new = True
     if need_new:
-        database_url = os.environ["DATABASE_URL"]
-        log.info("Conectando ao PostgreSQL...")
-        _pool = psycopg2.connect(database_url, sslmode="require")
-        _pool.autocommit = True
-        log.info("✓ Conectado ao PostgreSQL (Neon)")
+        last_error: Optional[Exception] = None
+        for env_name, database_url in _database_url_candidates():
+            try:
+                log.info(f"Conectando ao PostgreSQL via {env_name}...")
+                _pool = psycopg2.connect(database_url, sslmode="require")
+                _pool.autocommit = True
+                break
+            except Exception as err:
+                last_error = err
+                _pool = None
+                log.warning(f"Falha ao conectar via {env_name}: {err}")
+        if _pool is None:
+            if last_error is not None:
+                raise last_error
+            raise KeyError("DATABASE_URL")
+        log.info(f"✓ Conectado ao PostgreSQL (Neon) via {env_name}")
     return _pool
 
 
@@ -98,6 +121,62 @@ def test_connection() -> bool:
     except Exception as e:
         log.error(f"✗ Falha na conexão: {e}")
         return False
+
+
+def ensure_benchmark_tables() -> None:
+    """Cria as tabelas de benchmark caso ainda não existam."""
+    statements = [
+        "CREATE EXTENSION IF NOT EXISTS pgcrypto",
+        """
+        CREATE TABLE IF NOT EXISTS crawl_runs (
+            id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+            fonte_id uuid NOT NULL REFERENCES fontes(id) ON DELETE CASCADE,
+            pipeline_version text NOT NULL,
+            stage text NOT NULL,
+            trigger_mode text NOT NULL,
+            status text NOT NULL,
+            started_at timestamp NOT NULL DEFAULT NOW(),
+            finished_at timestamp,
+            elapsed_ms integer,
+            config_snapshot jsonb,
+            site_profile_snapshot jsonb,
+            summary_metrics jsonb
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS crawl_run_items (
+            id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+            run_id uuid NOT NULL REFERENCES crawl_runs(id) ON DELETE CASCADE,
+            url text NOT NULL,
+            item_type text NOT NULL,
+            discovered boolean NOT NULL DEFAULT false,
+            extracted_data jsonb,
+            field_sources jsonb,
+            field_confidence jsonb,
+            validator_status text,
+            validator_reasons jsonb,
+            images_meta jsonb,
+            raw_metrics jsonb
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS crawl_run_comparisons (
+            id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+            legacy_run_id uuid REFERENCES crawl_runs(id) ON DELETE CASCADE,
+            candidate_run_id uuid REFERENCES crawl_runs(id) ON DELETE CASCADE,
+            comparison_scope text NOT NULL,
+            report_json jsonb NOT NULL,
+            report_markdown text NOT NULL,
+            created_at timestamp NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_crawl_runs_fonte_stage ON crawl_runs(fonte_id, stage, pipeline_version, started_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_crawl_run_items_run_url ON crawl_run_items(run_id, url)",
+        "CREATE INDEX IF NOT EXISTS idx_crawl_run_comparisons_runs ON crawl_run_comparisons(legacy_run_id, candidate_run_id)",
+    ]
+    with cursor() as cur:
+        for stmt in statements:
+            cur.execute(stmt)
 
 
 # ─── Types ────────────────────────────────────────────────────────────────────
@@ -312,6 +391,159 @@ def get_existing_imovel_urls(fonte_id: str) -> set[str]:
             (fonte_id,),
         )
         return {row["url_anuncio"] for row in cur.fetchall()}
+
+
+def get_existing_imovel_urls_list(fonte_id: str) -> list[str]:
+    """Retorna lista ordenada de URLs já persistidas para uma fonte."""
+    with cursor() as cur:
+        cur.execute(
+            "SELECT url_anuncio FROM imoveis WHERE fonte_id = %s ORDER BY url_anuncio",
+            (fonte_id,),
+        )
+        return [row["url_anuncio"] for row in cur.fetchall()]
+
+
+def create_crawl_run(
+    fonte_id: str,
+    pipeline_version: str,
+    stage: str,
+    trigger_mode: str,
+    status: str,
+    config_snapshot: Optional[dict] = None,
+    site_profile_snapshot: Optional[dict] = None,
+) -> str:
+    run_id = str(uuid.uuid4())
+    with cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO crawl_runs (
+                id, fonte_id, pipeline_version, stage, trigger_mode, status,
+                config_snapshot, site_profile_snapshot
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)
+            """,
+            (
+                run_id,
+                fonte_id,
+                pipeline_version,
+                stage,
+                trigger_mode,
+                status,
+                json.dumps(config_snapshot or {}, ensure_ascii=False),
+                json.dumps(site_profile_snapshot or {}, ensure_ascii=False),
+            ),
+        )
+    return run_id
+
+
+def finalize_crawl_run(
+    run_id: str,
+    status: str,
+    elapsed_ms: int,
+    summary_metrics: Optional[dict] = None,
+) -> None:
+    with cursor() as cur:
+        cur.execute(
+            """
+            UPDATE crawl_runs
+            SET status = %s,
+                finished_at = NOW(),
+                elapsed_ms = %s,
+                summary_metrics = %s::jsonb
+            WHERE id = %s
+            """,
+            (
+                status,
+                elapsed_ms,
+                json.dumps(summary_metrics or {}, ensure_ascii=False),
+                run_id,
+            ),
+        )
+
+
+def fail_crawl_run(run_id: str, error_message: str, elapsed_ms: int = 0) -> None:
+    with cursor() as cur:
+        cur.execute(
+            """
+            UPDATE crawl_runs
+            SET status = 'erro',
+                finished_at = NOW(),
+                elapsed_ms = %s,
+                summary_metrics = COALESCE(summary_metrics, '{}'::jsonb) || %s::jsonb
+            WHERE id = %s
+            """,
+            (
+                elapsed_ms,
+                json.dumps({"error": error_message[:500]}, ensure_ascii=False),
+                run_id,
+            ),
+        )
+
+
+def insert_crawl_run_items(run_id: str, items: list[dict]) -> int:
+    if not items:
+        return 0
+
+    values = [
+        (
+            str(uuid.uuid4()),
+            run_id,
+            item["url"],
+            item.get("item_type", "detail"),
+            bool(item.get("discovered", False)),
+            json.dumps(item.get("extracted_data"), ensure_ascii=False) if item.get("extracted_data") is not None else None,
+            json.dumps(item.get("field_sources"), ensure_ascii=False) if item.get("field_sources") is not None else None,
+            json.dumps(item.get("field_confidence"), ensure_ascii=False) if item.get("field_confidence") is not None else None,
+            item.get("validator_status"),
+            json.dumps(item.get("validator_reasons"), ensure_ascii=False) if item.get("validator_reasons") is not None else None,
+            json.dumps(item.get("images_meta"), ensure_ascii=False) if item.get("images_meta") is not None else None,
+            json.dumps(item.get("raw_metrics"), ensure_ascii=False) if item.get("raw_metrics") is not None else None,
+        )
+        for item in items
+    ]
+
+    with cursor() as cur:
+        psycopg2.extras.execute_values(
+            cur,
+            """
+            INSERT INTO crawl_run_items (
+                id, run_id, url, item_type, discovered, extracted_data,
+                field_sources, field_confidence, validator_status,
+                validator_reasons, images_meta, raw_metrics
+            ) VALUES %s
+            """,
+            values,
+            template="(%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s::jsonb, %s::jsonb, %s::jsonb)",
+        )
+    return len(values)
+
+
+def create_crawl_run_comparison(
+    legacy_run_id: Optional[str],
+    candidate_run_id: Optional[str],
+    comparison_scope: str,
+    report_json: dict,
+    report_markdown: str,
+) -> str:
+    comparison_id = str(uuid.uuid4())
+    with cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO crawl_run_comparisons (
+                id, legacy_run_id, candidate_run_id, comparison_scope, report_json, report_markdown
+            )
+            VALUES (%s, %s, %s, %s, %s::jsonb, %s)
+            """,
+            (
+                comparison_id,
+                legacy_run_id,
+                candidate_run_id,
+                comparison_scope,
+                json.dumps(report_json, ensure_ascii=False),
+                report_markdown,
+            ),
+        )
+    return comparison_id
 
 
 def sync_imovel_status(fonte_id: str, current_urls: set[str]) -> tuple[int, int]:

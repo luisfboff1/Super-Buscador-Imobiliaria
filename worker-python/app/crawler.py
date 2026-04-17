@@ -27,6 +27,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import psutil
 from scrapling.fetchers import Fetcher, StealthyFetcher
 
+from app.benchmark_metrics import record_browser_call, record_http_call, record_strategy, record_timing
+
 
 # Catch unhandled thread exceptions
 def _thread_excepthook(args):
@@ -46,6 +48,8 @@ log = get_logger("crawler")
 MAX_PAGES = int(os.environ.get("CRAWL_MAX_PAGES", "200"))
 MAX_ENRICH = int(os.environ.get("CRAWL_MAX_ENRICH", "0"))  # 0 = todos (sem limite)
 CONCURRENCY = int(os.environ.get("CRAWL_CONCURRENCY", "3"))  # paralelo (reduzido de 5→3 para evitar crash de Chromium por OOM)
+PAGINATION_HTTP_BATCH_SIZE = int(os.environ.get("CRAWL_PAGINATION_HTTP_BATCH_SIZE", "5"))
+PAGINATION_STEALTH_BATCH_SIZE = int(os.environ.get("CRAWL_PAGINATION_STEALTH_BATCH_SIZE", "1"))
 
 # Semáforo global: limita instâncias Playwright simultâneas (cada uma ~200MB RAM)
 MAX_STEALTH_CONCURRENT = int(os.environ.get("MAX_STEALTH_CONCURRENT", "2"))
@@ -59,6 +63,38 @@ MEM_THROTTLE_MB = int(os.environ.get("MEM_THROTTLE_MB", "700"))
 _domain_stealth: dict[str, bool] = {}
 _domain_stealth_lock = __import__('threading').Lock()
 _domain_stealth_samples: dict[str, list[bool]] = {}  # hostname -> [precisou_stealth, ...]
+
+
+def get_runtime_tuning() -> dict[str, int]:
+    return {
+        "max_pages": MAX_PAGES,
+        "pagination_http_batch_size": PAGINATION_HTTP_BATCH_SIZE,
+        "pagination_stealth_batch_size": PAGINATION_STEALTH_BATCH_SIZE,
+        "max_stealth_concurrent": MAX_STEALTH_CONCURRENT,
+    }
+
+
+def configure_runtime_tuning(
+    *,
+    max_pages: Optional[int] = None,
+    pagination_http_batch_size: Optional[int] = None,
+    pagination_stealth_batch_size: Optional[int] = None,
+    max_stealth_concurrent: Optional[int] = None,
+) -> dict[str, int]:
+    global MAX_PAGES, PAGINATION_HTTP_BATCH_SIZE, PAGINATION_STEALTH_BATCH_SIZE
+    global MAX_STEALTH_CONCURRENT, _stealth_semaphore
+
+    previous = get_runtime_tuning()
+    if max_pages and max_pages > 0:
+        MAX_PAGES = max_pages
+    if pagination_http_batch_size and pagination_http_batch_size > 0:
+        PAGINATION_HTTP_BATCH_SIZE = pagination_http_batch_size
+    if pagination_stealth_batch_size and pagination_stealth_batch_size > 0:
+        PAGINATION_STEALTH_BATCH_SIZE = pagination_stealth_batch_size
+    if max_stealth_concurrent and max_stealth_concurrent > 0 and max_stealth_concurrent != MAX_STEALTH_CONCURRENT:
+        MAX_STEALTH_CONCURRENT = max_stealth_concurrent
+        _stealth_semaphore = threading.Semaphore(MAX_STEALTH_CONCURRENT)
+    return previous
 
 # ─── Filtros de URL ───────────────────────────────────────────────────────────
 
@@ -162,6 +198,7 @@ def fetch_page(url: str, stealth: bool = False) -> Optional[object]:
     """
     try:
         if stealth:
+            record_browser_call()
             log.debug(f"Fetch stealth: {url}")
             _stealth_semaphore.acquire()
             try:
@@ -178,6 +215,7 @@ def fetch_page(url: str, stealth: bool = False) -> Optional[object]:
                 gc.collect()
         else:
             log.debug(f"Fetch rápido: {url}")
+            record_http_call()
             page = Fetcher.get(
                 url,
                 stealthy_headers=True,
@@ -258,6 +296,7 @@ def fetch_page_with_scroll(url: str, max_scrolls: int = 50,
         progress(f"    📜 Scroll: {i+1} iterações, {total_clicks} cliques (altura: {prev_height}px)")
     
     try:
+        record_browser_call()
         log.info(f"Fetch com scroll: {url}")
         _stealth_semaphore.acquire()
         try:
@@ -291,6 +330,7 @@ def fetch_page_with_js_pagination(
     """
     progress = on_progress or log.info
     collected_links: set = set()
+    record_browser_call()
 
     def _paginate_action(page):
         """Sync page_action: clica em cada botão de página."""
@@ -875,6 +915,7 @@ def discover_property_urls(
     Se definido com listing_urls, pula a Fase 1 e usa essas URLs diretamente.
     """
     progress = on_progress or log.info
+    record_strategy("legacy_discovery")
     base_url = site_url.rstrip("/")
     base_hostname = urlparse(site_url).hostname or ""
     all_detail_urls: set[str] = set()
@@ -889,6 +930,7 @@ def discover_property_urls(
     listing_cache: dict[str, tuple] = {}  # {url_final: (page, links)} — cache da Fase 1
     listing_tipos: dict[str, str] = {}  # {url_final: tipo} — para dedup por tipo
     llm_pagination_hint: Optional[dict] = None  # Dica de paginação do LLM
+    structure_started = time.perf_counter()
 
     # SEMPRE usa Playwright — renderiza JS, SPAs, botões, tudo.
     used_stealth = True
@@ -1048,6 +1090,8 @@ def discover_property_urls(
         progress("✗ Nenhuma listagem encontrada")
         return []
 
+    record_timing("discovery_structure_ms", int((time.perf_counter() - structure_started) * 1000))
+
     progress(f"✓ {len(listing_urls)} listagem(s) confirmada(s):")
     for u in listing_urls:
         progress(f"  • {u}")
@@ -1056,6 +1100,7 @@ def discover_property_urls(
     progress(f"\n{'─'*50}")
     progress(f"FASE 2: Paginação")
     progress(f"{'─'*50}")
+    pagination_started = time.perf_counter()
 
     # Template de paginação confirmado na listagem anterior (reutilizar)
     confirmed_template: Optional[str] = None
@@ -1244,7 +1289,7 @@ def discover_property_urls(
                 if has_js_pagination:
                     progress(f"    📄 Detectado JS pagination — clicando páginas...")
                     js_links = fetch_page_with_js_pagination(
-                        listing_url, base_hostname, max_pages=100, on_progress=progress
+                        listing_url, base_hostname, max_pages=MAX_PAGES, on_progress=progress
                     )
                     new_js = [l for l in js_links if l not in all_detail_urls]
                     for l in js_links:
@@ -1258,7 +1303,7 @@ def discover_property_urls(
                     if page1_links:
                         progress(f"    🔄 JS pagination dinâmica (last resort)...")
                         js_links_lr = fetch_page_with_js_pagination(
-                            listing_url, base_hostname, max_pages=100, on_progress=progress
+                            listing_url, base_hostname, max_pages=MAX_PAGES, on_progress=progress
                         )
                         new_js_lr = [l for l in js_links_lr if l not in all_detail_urls]
                         if new_js_lr:
@@ -1332,12 +1377,13 @@ def discover_property_urls(
 
         while page_num <= _max_page_val and empty_pages < 2:
             # ── Parallel batch fetching: HTTP puro, template confirmado, sem SPA ──
-            if template_confirmed and not stealth_required:
-                BATCH_SIZE = 5
+            if template_confirmed:
+                batch_size = PAGINATION_STEALTH_BATCH_SIZE if stealth_required else PAGINATION_HTTP_BATCH_SIZE
+                batch_size = max(batch_size, 1)
                 batch_start = page_num
                 batch_nums = [
                     batch_start + i * _offset_step
-                    for i in range(BATCH_SIZE)
+                    for i in range(batch_size)
                     if batch_start + i * _offset_step <= _max_page_val
                 ]
                 if not batch_nums:
@@ -1348,7 +1394,7 @@ def discover_property_urls(
 
                 # Fetch em paralelo com ThreadPoolExecutor
                 batch_results: dict[int, list[str]] = {}
-                with ThreadPoolExecutor(max_workers=BATCH_SIZE) as pool:
+                with ThreadPoolExecutor(max_workers=batch_size) as pool:
                     futures = {
                         pool.submit(fetch_page, url, use_stealth_batch): pn
                         for pn, url in batch_urls
@@ -1384,7 +1430,7 @@ def discover_property_urls(
 
                 last_pn = sorted(batch_results.keys())[-1] if batch_results else batch_nums[-1]
                 progress(f"    Págs {batch_nums[0]}-{last_pn}: "
-                         f"batch {'stealth' if use_stealth_batch else 'HTTP'} ×{BATCH_SIZE}, "
+                         f"batch {'stealth' if use_stealth_batch else 'HTTP'} ×{batch_size}, "
                          f"total: {len(all_detail_urls)}")
 
                 if hit_empty_end:
@@ -1476,7 +1522,7 @@ def discover_property_urls(
         if not used_llm_hint and useful_pages <= 1 and p1_page:
             progress(f"    ⚠️ Template URL sem novos resultados (session-based?), tentando JS pagination...")
             js_links_sf = fetch_page_with_js_pagination(
-                listing_url, base_hostname, max_pages=100, on_progress=progress
+                listing_url, base_hostname, max_pages=MAX_PAGES, on_progress=progress
             )
             new_js_sf = [l for l in js_links_sf if l not in all_detail_urls]
             if new_js_sf:
@@ -1620,7 +1666,7 @@ def discover_property_urls(
                 if _js_pag_found:
                     progress(f"    📄 Detectado JS pagination (fallback) — clicando páginas...")
                     js_links = fetch_page_with_js_pagination(
-                        listing_url, base_hostname, max_pages=100, on_progress=progress
+                        listing_url, base_hostname, max_pages=MAX_PAGES, on_progress=progress
                     )
                     new_js = [l for l in js_links if l not in all_detail_urls]
                     for l in js_links:
@@ -1630,7 +1676,7 @@ def discover_property_urls(
                     # Último recurso: tentar JS pagination e scroll sem detecção prévia
                     progress(f"    🔄 JS pagination dinâmica (last resort)...")
                     js_links_lr2 = fetch_page_with_js_pagination(
-                        listing_url, base_hostname, max_pages=100, on_progress=progress
+                        listing_url, base_hostname, max_pages=MAX_PAGES, on_progress=progress
                     )
                     new_js_lr2 = [l for l in js_links_lr2 if l not in all_detail_urls]
                     if new_js_lr2:
@@ -1671,6 +1717,7 @@ def discover_property_urls(
                 llm_pagination_hint["tipo"] = "query_param"
 
     progress(f"\n✓ Descoberta concluída: {len(all_detail_urls)} URLs")
+    record_timing("discovery_pagination_ms", int((time.perf_counter() - pagination_started) * 1000))
 
     # Se a descoberta detectou SPA, propagar para enriquecimento via _domain_stealth
     # (evita que scrape_property_page tente HTTP e pegue HTML incompleto)
@@ -2121,6 +2168,54 @@ def scrape_property_page(
 
 
 # ─── Execução completa de um crawl ───────────────────────────────────────────
+
+def fetch_property_html(url: str) -> tuple[Optional[str], str]:
+    """
+    Busca o HTML de uma página de detalhe usando a mesma cascata do scrape legado.
+
+    Retorna (html, source), onde source é "http" ou "stealth".
+    """
+    from urllib.parse import urlparse as _urlparse
+
+    _hostname = _urlparse(url).hostname or ""
+    with _domain_stealth_lock:
+        _forced_stealth = _domain_stealth.get(_hostname)
+
+    if _forced_stealth is True:
+        page = fetch_page(url, stealth=True)
+        source = "stealth"
+        needed_stealth = True
+    else:
+        page = fetch_page(url, stealth=False)
+        source = "http"
+        needed_stealth = False
+
+        if not page or not has_real_content(page):
+            page = fetch_page(url, stealth=True)
+            source = "stealth"
+            needed_stealth = True
+
+    with _domain_stealth_lock:
+        if _hostname and _forced_stealth is None:
+            samples = _domain_stealth_samples.setdefault(_hostname, [])
+            samples.append(needed_stealth)
+            if len(samples) >= 5:
+                if all(samples):
+                    _domain_stealth[_hostname] = True
+                elif not any(samples):
+                    _domain_stealth[_hostname] = False
+
+    if not page:
+        return None, source
+
+    html = safe_html(page)
+    del page
+
+    if not html or len(html) < 200:
+        return None, source
+
+    return html, source
+
 
 class CrawlStats:
     """Estatísticas de um crawl."""

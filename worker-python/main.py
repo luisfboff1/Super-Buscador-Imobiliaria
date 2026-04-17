@@ -13,9 +13,12 @@ Logs detalhados para monitoramento no Railway.
 
 import os
 import sys
+import json
 import faulthandler
+import argparse
 import threading
 import time
+from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
@@ -27,13 +30,27 @@ faulthandler.enable(file=sys.stderr, all_threads=True)
 from dotenv import load_dotenv
 
 load_dotenv()  # carrega .env em dev
+if not (
+    os.environ.get("DOPPLER_PROJECT")
+    or os.environ.get("DOPPLER_CONFIG")
+    or os.environ.get("DOPPLER_ENVIRONMENT")
+):
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env.local", override=False)
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.logger import setup_logging, get_logger
-from app.db import get_fonte_by_id, update_fonte_status, update_crawl_progress, test_connection, reset_stuck_crawling_fontes
+from app.db import (
+    ensure_benchmark_tables,
+    get_fonte_by_id,
+    update_fonte_status,
+    update_crawl_progress,
+    test_connection,
+    reset_stuck_crawling_fontes,
+)
+from app.benchmark_runner import run_benchmark
 from app.crawler import execute_crawl, CrawlStats
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
@@ -330,6 +347,7 @@ async def startup():
     def _test_db():
         try:
             test_connection()
+            ensure_benchmark_tables()
             # Reseta fontes presas em 'crawling' (este worker foi reiniciado)
             reset_stuck_crawling_fontes()
         except Exception as e:
@@ -343,8 +361,44 @@ async def startup():
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    import uvicorn
+    if len(sys.argv) > 1 and sys.argv[1] == "benchmark":
+        parser = argparse.ArgumentParser(description="Benchmark local legacy vs candidate")
+        parser.add_argument("benchmark", nargs="?")
+        parser.add_argument("--fonte-id", required=True)
+        parser.add_argument("--pipeline", choices=["legacy", "candidate", "both"], default="both")
+        parser.add_argument("--stage", choices=["discovery", "extraction", "full"], default="discovery")
+        parser.add_argument("--sample-size", type=int, default=0)
+        parser.add_argument("--use-existing-detail-urls", action="store_true")
+        parser.add_argument("--persist-report", action="store_true")
+        parser.add_argument("--output", choices=["json", "md", "both"], default="both")
+        parser.add_argument("--max-pages", type=int, default=0)
+        parser.add_argument("--pagination-http-batch-size", type=int, default=0)
+        parser.add_argument("--pagination-stealth-batch-size", type=int, default=0)
+        parser.add_argument("--max-stealth-concurrent", type=int, default=0)
+        args = parser.parse_args()
 
-    port = int(os.environ.get("PORT", "3001"))
-    log.info(f"Iniciando servidor na porta {port}")
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
+        result = run_benchmark(
+            fonte_id=args.fonte_id,
+            pipeline_mode=args.pipeline,
+            stage=args.stage,
+            sample_size=args.sample_size,
+            use_existing_detail_urls=args.use_existing_detail_urls,
+            persist_report=args.persist_report,
+            trigger_mode="cli",
+            max_pages=args.max_pages or None,
+            pagination_http_batch_size=args.pagination_http_batch_size or None,
+            pagination_stealth_batch_size=args.pagination_stealth_batch_size or None,
+            max_stealth_concurrent=args.max_stealth_concurrent or None,
+            stream_progress=True,
+        )
+
+        if args.output in ("json", "both"):
+            print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        if args.output in ("md", "both") and result.get("comparison_markdown"):
+            print("\n" + result["comparison_markdown"])
+    else:
+        import uvicorn
+
+        port = int(os.environ.get("PORT", "3001"))
+        log.info(f"Iniciando servidor na porta {port}")
+        uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
