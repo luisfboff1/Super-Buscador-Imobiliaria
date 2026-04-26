@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Plus, AlertTriangle, Building } from "lucide-react";
 import { getFontesComContagem } from "@/lib/db/queries";
 import { FonteActions } from "@/components/fontes/FonteActions";
+import { FontesBulkActions } from "@/components/fontes/FontesBulkActions";
 
 const statusLabel: Record<string, { label: string; badge: string; dot: string }> = {
   ok: { label: "Ativo", badge: "badge-success", dot: "dot-green" },
@@ -33,6 +34,14 @@ export default async function FontesPage() {
           <div className="topbar-sub">Gerencie as imobiliárias que o sistema rastreia</div>
         </div>
         <div className="topbar-actions">
+          <FontesBulkActions
+            fontes={fontes.map((f) => ({
+              id: f.id,
+              url: f.url,
+              status: f.status,
+              totalImoveis: f.totalImoveis,
+            }))}
+          />
           <Link href="/fontes/importar" className="btn btn-ghost">
             <Building size={15} />
             Importar via CRECI

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { RefreshCw, Settings, Check, AlertCircle, Search, Zap, Loader2, RotateCcw } from "lucide-react";
+import { RefreshCw, Trash2, Check, AlertCircle, Search, Zap, Loader2, RotateCcw } from "lucide-react";
 
 interface CrawlProgress {
   fase: string;
@@ -33,6 +33,7 @@ export function FonteActions({ fonteId, status }: FonteActionsProps) {
   const router = useRouter();
   const [syncing, setSyncing] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [progress, setProgress] = useState<CrawlProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -201,6 +202,29 @@ export function FonteActions({ fonteId, status }: FonteActionsProps) {
     }
   }
 
+  async function handleExcluir() {
+    const confirmed = window.confirm(
+      "Excluir esta fonte? Todos os imóveis dela serão apagados. Essa ação não pode ser desfeita."
+    );
+    if (!confirmed) return;
+
+    setDeleting(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/fontes/${fonteId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || "Erro ao excluir fonte");
+        setDeleting(false);
+        return;
+      }
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erro de rede");
+      setDeleting(false);
+    }
+  }
+
   const fase = progress ? FASE_LABELS[progress.fase] ?? FASE_LABELS.descoberta : null;
 
   return (
@@ -295,10 +319,13 @@ export function FonteActions({ fonteId, status }: FonteActionsProps) {
         </button>
         <button
           className="btn btn-ghost btn-sm"
-          style={{ flex: 1, justifyContent: "center" }}
+          style={{ flex: 1, justifyContent: "center", color: "var(--danger)" }}
+          onClick={handleExcluir}
+          disabled={syncing || deleting}
+          title="Apaga essa fonte e todos os imóveis dela"
         >
-          <Settings size={13} />
-          {status === "erro" ? "Editar URL" : "Configurar"}
+          <Trash2 size={13} />
+          {deleting ? "Excluindo..." : "Excluir"}
         </button>
       </div>
     </div>

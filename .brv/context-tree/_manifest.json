@@ -15,25 +15,25 @@
     {
       "importance": 50,
       "path": "architecture/context.md",
-      "tokens": 166,
+      "tokens": 171,
       "type": "context"
     },
     {
       "importance": 50,
       "path": "architecture/web_scraping/benchmark_timing_breakdown_and_doppler_run_validation.md",
-      "tokens": 1225,
+      "tokens": 1240,
       "type": "context"
     },
     {
       "importance": 50,
       "path": "architecture/web_scraping/buscador_sort_and_extractor_refinements.md",
-      "tokens": 1479,
+      "tokens": 1497,
       "type": "context"
     },
     {
       "importance": 50,
       "path": "architecture/web_scraping/context.md",
-      "tokens": 108,
+      "tokens": 112,
       "type": "context"
     },
     {
@@ -47,13 +47,13 @@
     {
       "importance": 50,
       "path": "facts/context.md",
-      "tokens": 140,
+      "tokens": 145,
       "type": "context"
     },
     {
       "importance": 50,
       "path": "facts/project/context.md",
-      "tokens": 65,
+      "tokens": 67,
       "type": "context"
     },
     {
@@ -67,17 +67,17 @@
     {
       "importance": 50,
       "path": "facts/project/repository_local_context_tree_reset.md",
-      "tokens": 369,
+      "tokens": 379,
       "type": "context"
     }
   ],
-  "generated_at": "2026-04-17T19:51:15.839Z",
+  "generated_at": "2026-04-26T14:52:40.622Z",
   "lane_tokens": {
-    "contexts": 3654,
+    "contexts": 3713,
     "stubs": 0,
     "summaries": 1681
   },
-  "source_fingerprint": "d5d9548637d5b808f9191bb6a8641a29087d8663aed63a9a32819041132cb9f1",
-  "total_tokens": 5335,
+  "source_fingerprint": "9b6a9b23f568167dd770736e5cd7f8862d9ab6e433fd9122140f5f2c77c89286",
+  "total_tokens": 5394,
   "version": 1
 }

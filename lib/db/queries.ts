@@ -1,4 +1,4 @@
-import { count, eq, desc, asc, and, gte, ilike, sql, or } from "drizzle-orm";
+import { count, eq, desc, asc, and, gte, ilike, sql, or, inArray } from "drizzle-orm";
 import { db, tenantSchema, authSchema } from "@/lib/db";
 
 // ─── STATS ────────────────────────────────────────────────────────────────────
@@ -92,6 +92,15 @@ export async function createFonte(data: {
 
 export async function deleteFonte(id: string) {
   await db.delete(tenantSchema.fontes).where(eq(tenantSchema.fontes.id, id));
+}
+
+export async function deleteFontes(ids: string[]) {
+  if (ids.length === 0) return 0;
+  const result = await db
+    .delete(tenantSchema.fontes)
+    .where(inArray(tenantSchema.fontes.id, ids))
+    .returning({ id: tenantSchema.fontes.id });
+  return result.length;
 }
 
 export async function updateFonteStatus(
