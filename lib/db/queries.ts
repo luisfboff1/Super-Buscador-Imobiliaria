@@ -103,6 +103,35 @@ export async function deleteFontes(ids: string[]) {
   return result.length;
 }
 
+// ─── CRECI Import Jobs ────────────────────────────────────────────────────────
+
+export async function createImportJob(cidade: string, estado: string = "RS") {
+  const [job] = await db
+    .insert(tenantSchema.creciImportJobs)
+    .values({ cidade, estado, status: "pending" })
+    .returning();
+  return job;
+}
+
+export async function getImportJob(id: string) {
+  const [job] = await db
+    .select()
+    .from(tenantSchema.creciImportJobs)
+    .where(eq(tenantSchema.creciImportJobs.id, id))
+    .limit(1);
+  return job ?? null;
+}
+
+export async function updateImportJob(
+  id: string,
+  patch: Partial<typeof tenantSchema.creciImportJobs.$inferInsert>
+) {
+  await db
+    .update(tenantSchema.creciImportJobs)
+    .set(patch)
+    .where(eq(tenantSchema.creciImportJobs.id, id));
+}
+
 export async function updateFonteStatus(
   id: string,
   status: string,

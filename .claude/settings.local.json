@@ -6,7 +6,21 @@
       "Bash(npm view *)",
       "Bash(npm install *)",
       "Bash(npm ls *)",
-      "Bash(npm audit *)"
+      "Bash(npm audit *)",
+      "WebSearch",
+      "WebFetch(domain:www.creci-rs.gov.br)",
+      "Bash(curl -sS -A \"Mozilla/5.0 \\(Windows NT 10.0; Win64; x64\\) AppleWebKit/537.36 \\(KHTML, like Gecko\\) Chrome/122.0.0.0 Safari/537.36\" \"https://www.creci-rs.gov.br/siteNovo/pesquisaInscrito.php\" -o /tmp/creci_form.html -w \"HTTP %{http_code} | size=%{size_download}\\\\n\")",
+      "Bash(curl -sS -k -A \"Mozilla/5.0 \\(Windows NT 10.0; Win64; x64\\) AppleWebKit/537.36 \\(KHTML, like Gecko\\) Chrome/122.0.0.0 Safari/537.36\" \"https://www.creci-rs.gov.br/siteNovo/pesquisaInscrito.php\" -o /tmp/creci_form.html -w \"HTTP %{http_code} | size=%{size_download}\\\\n\")",
+      "Bash(curl -sS -k -A \"Mozilla/5.0 \\(Windows NT 10.0; Win64; x64\\) AppleWebKit/537.36 \\(KHTML, like Gecko\\) Chrome/122.0.0.0 Safari/537.36\" \"https://www.creci-rs.gov.br/siteNovo/pesquisaInscrito.php\" -o ./_tmp/creci_form.html -w \"HTTP %{http_code} | size=%{size_download}\\\\n\")",
+      "Bash(curl -sS -k -X POST -A 'Mozilla/5.0 \\(Windows NT 10.0; Win64; x64\\) AppleWebKit/537.36 \\(KHTML, like Gecko\\) Chrome/122.0.0.0 Safari/537.36' -H 'Content-Type: application/x-www-form-urlencoded' -H 'Referer: https://www.creci-rs.gov.br/siteNovo/pesquisaInscrito.php' --data-urlencode acao=pesquisar --data-urlencode busca= --data-urlencode fg_tipo_pessoa=2 --data-urlencode cd_cidade=68020 https://www.creci-rs.gov.br/siteNovo/pesquisaInscrito.php -o ./_tmp/creci_caxias.html -w 'HTTP %{http_code} | size=%{size_download}\\\\n')",
+      "Bash(curl -sS -k -I -A \"Mozilla/5.0\" \"https://www.creci-rs.gov.br/siteNovo/pesquisaInscrito.php\")",
+      "Bash(node -e ' *)",
+      "Bash(npx tsc *)",
+      "Bash(doppler run *)",
+      "Bash(doppler configure *)",
+      "Bash(npx tsx *)",
+      "Bash(doppler projects *)",
+      "Bash(doppler setup *)"
     ]
   }
 }

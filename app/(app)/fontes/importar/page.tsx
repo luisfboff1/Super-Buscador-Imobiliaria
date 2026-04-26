@@ -1,58 +1,106 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { ArrowLeft, Search, ExternalLink, CheckSquare, Square, Loader2 } from "lucide-react";
 
 interface ImobiliariaCRECI {
   nome: string;
+  nomeFantasia?: string | null;
   cidade: string;
   estado: string;
   url: string | null;
   creci?: string | null;
+  situacao?: string | null;
 }
 
-interface ResultadoCRECI {
+interface JobStatus {
+  id: string;
   cidade: string;
+  estado: string;
+  status: "pending" | "running" | "completed" | "failed";
   total: number;
+  enriched: number;
   imobiliarias: ImobiliariaCRECI[];
+  errorMessage: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
 }
 
 export default function ImportarFontesPage() {
   const [cidade, setCidade] = useState("");
   const [loading, setLoading] = useState(false);
   const [importando, setImportando] = useState(false);
-  const [resultado, setResultado] = useState<ResultadoCRECI | null>(null);
+  const [job, setJob] = useState<JobStatus | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [selecionados, setSelecionados] = useState<Set<number>>(new Set());
   const [urlsEditadas, setUrlsEditadas] = useState<Record<number, string>>({});
   const [importadosCount, setImportadosCount] = useState<number | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => stopPolling();
+  }, [stopPolling]);
+
+  const pollJob = useCallback(async (jobId: string) => {
+    try {
+      const res = await fetch(`/api/creci/import/${jobId}`);
+      if (!res.ok) return;
+      const data = (await res.json()) as JobStatus;
+      setJob(data);
+
+      if (data.status === "completed") {
+        stopPolling();
+        setLoading(false);
+        // Pré-seleciona todas com URL
+        const comUrl = new Set<number>(
+          data.imobiliarias
+            .map((_, i) => i)
+            .filter((i) => !!data.imobiliarias[i].url)
+        );
+        setSelecionados(comUrl);
+      } else if (data.status === "failed") {
+        stopPolling();
+        setLoading(false);
+        setErro(data.errorMessage || "Falha na importação");
+      }
+    } catch {
+      // silently retry
+    }
+  }, [stopPolling]);
 
   async function handleBuscar(e: React.FormEvent) {
     e.preventDefault();
     if (!cidade.trim()) return;
     setLoading(true);
     setErro(null);
-    setResultado(null);
+    setJob(null);
     setSelecionados(new Set());
     setUrlsEditadas({});
     setImportadosCount(null);
 
     try {
-      const res = await fetch(`/api/creci/extract?cidade=${encodeURIComponent(cidade.trim())}`);
+      const res = await fetch("/api/creci/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cidade: cidade.trim() }),
+      });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Erro ao buscar");
-      setResultado(data);
-      // Pré-seleciona todas com URL
-      const comUrl = new Set<number>(
-        data.imobiliarias
-          .map((_: ImobiliariaCRECI, i: number) => i)
-          .filter((i: number) => !!data.imobiliarias[i].url) as number[]
-      );
-      setSelecionados(comUrl);
+      if (!res.ok) throw new Error(data.error || "Erro ao iniciar busca");
+
+      // Inicia polling a cada 2.5s
+      pollRef.current = setInterval(() => pollJob(data.jobId), 2500);
+      // Primeira poll rápida
+      setTimeout(() => pollJob(data.jobId), 800);
     } catch (err) {
       setErro(err instanceof Error ? err.message : "Falha ao buscar");
-    } finally {
       setLoading(false);
     }
   }
@@ -67,25 +115,25 @@ export default function ImportarFontesPage() {
   }
 
   function toggleTodos() {
-    if (!resultado) return;
-    if (selecionados.size === resultado.imobiliarias.length) {
+    if (!job) return;
+    if (selecionados.size === job.imobiliarias.length) {
       setSelecionados(new Set());
     } else {
-      setSelecionados(new Set(resultado.imobiliarias.map((_, i) => i)));
+      setSelecionados(new Set(job.imobiliarias.map((_, i) => i)));
     }
   }
 
   async function handleImportar() {
-    if (!resultado || selecionados.size === 0) return;
+    if (!job || selecionados.size === 0) return;
     setImportando(true);
 
     const itens = [...selecionados]
       .map((idx) => {
-        const item = resultado.imobiliarias[idx];
+        const item = job.imobiliarias[idx];
         const url = urlsEditadas[idx] ?? item.url;
         if (!url) return null;
         return {
-          nome: item.nome,
+          nome: item.nomeFantasia || item.nome,
           url,
           cidade: item.cidade,
           estado: item.estado,
@@ -112,7 +160,7 @@ export default function ImportarFontesPage() {
   }
 
   const selecionadosComUrl = [...selecionados].filter((idx) => {
-    const item = resultado?.imobiliarias[idx];
+    const item = job?.imobiliarias[idx];
     return !!(urlsEditadas[idx] ?? item?.url);
   });
 
@@ -191,8 +239,36 @@ export default function ImportarFontesPage() {
                 color: "var(--text-2)",
               }}
             >
-              Buscando imobiliárias e descobrindo URLs via IA... Isso pode levar alguns
-              segundos.
+              {!job || job.status === "pending" ? (
+                <>Iniciando busca no CRECI-RS...</>
+              ) : job.total === 0 ? (
+                <>Buscando imobiliárias da cidade...</>
+              ) : (
+                <>
+                  <strong>{job.total}</strong> imobiliárias encontradas — descobrindo URLs:{" "}
+                  <strong>{job.enriched}/{job.total}</strong>
+                  {job.total > 0 && (
+                    <div
+                      style={{
+                        marginTop: 8,
+                        height: 4,
+                        background: "#e2e8f0",
+                        borderRadius: 2,
+                        overflow: "hidden",
+                      }}
+                    >
+                      <div
+                        style={{
+                          height: "100%",
+                          background: "var(--primary)",
+                          width: `${Math.round((job.enriched / job.total) * 100)}%`,
+                          transition: "width 0.4s",
+                        }}
+                      />
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           )}
         </div>
@@ -223,7 +299,7 @@ export default function ImportarFontesPage() {
         )}
 
         {/* Resultados */}
-        {resultado && (
+        {job && job.status === "completed" && (
           <>
             <div
               style={{
@@ -234,9 +310,11 @@ export default function ImportarFontesPage() {
               }}
             >
               <div style={{ fontSize: 13, color: "var(--text-2)" }}>
-                <strong style={{ color: "var(--text)" }}>{resultado.total}</strong> imobiliárias
+                <strong style={{ color: "var(--text)" }}>{job.total}</strong> imobiliárias
                 encontradas em{" "}
-                <strong style={{ color: "var(--text)" }}>{resultado.cidade || cidade}</strong>
+                <strong style={{ color: "var(--text)" }}>{job.cidade}</strong>
+                {" — "}
+                <strong style={{ color: "var(--text)" }}>{job.enriched}</strong> com URL
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <button
@@ -244,7 +322,7 @@ export default function ImportarFontesPage() {
                   onClick={toggleTodos}
                   style={{ fontSize: 12 }}
                 >
-                  {selecionados.size === resultado.imobiliarias.length
+                  {selecionados.size === job.imobiliarias.length
                     ? "Desmarcar todos"
                     : "Selecionar todos"}
                 </button>
@@ -266,7 +344,7 @@ export default function ImportarFontesPage() {
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {resultado.imobiliarias.map((item, idx) => {
+              {job.imobiliarias.map((item, idx) => {
                 const isSelected = selecionados.has(idx);
                 const urlAtual = urlsEditadas[idx] ?? item.url ?? "";
                 const temUrl = !!urlAtual;
@@ -301,8 +379,20 @@ export default function ImportarFontesPage() {
                           marginBottom: 4,
                         }}
                       >
-                        {item.nome}
+                        {item.nomeFantasia || item.nome}
                       </div>
+                      {item.nomeFantasia && item.nomeFantasia !== item.nome && (
+                        <div
+                          style={{
+                            fontSize: 11.5,
+                            color: "var(--text-3)",
+                            marginBottom: 2,
+                            fontStyle: "italic",
+                          }}
+                        >
+                          {item.nome}
+                        </div>
+                      )}
                       <div style={{ fontSize: 12, color: "var(--text-3)" }}>
                         {item.cidade}/{item.estado}
                         {item.creci && (

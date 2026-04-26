@@ -115,6 +115,20 @@ export const crawlRunComparisons = pgTable("crawl_run_comparisons", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const creciImportJobs = pgTable("creci_import_jobs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  cidade: text("cidade").notNull(),
+  estado: text("estado").default("RS").notNull(),
+  status: text("status").default("pending").notNull(), // pending | running | completed | failed
+  total: integer("total").default(0).notNull(),
+  enriched: integer("enriched").default(0).notNull(),
+  imobiliarias: jsonb("imobiliarias"), // [{nome, nomeFantasia, creci, situacao, url}]
+  errorMessage: text("error_message"),
+  startedAt: timestamp("started_at"),
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // Tipos inferidos do schema
 export type Fonte = typeof fontes.$inferSelect;
 export type NovaFonte = typeof fontes.$inferInsert;
@@ -125,3 +139,4 @@ export type Favorito = typeof favoritos.$inferSelect;
 export type CrawlRun = typeof crawlRuns.$inferSelect;
 export type CrawlRunItem = typeof crawlRunItems.$inferSelect;
 export type CrawlRunComparison = typeof crawlRunComparisons.$inferSelect;
+export type CreciImportJob = typeof creciImportJobs.$inferSelect;
