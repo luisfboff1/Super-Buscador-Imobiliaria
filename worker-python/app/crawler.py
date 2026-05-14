@@ -55,6 +55,13 @@ PAGINATION_STEALTH_BATCH_SIZE = int(os.environ.get("CRAWL_PAGINATION_STEALTH_BAT
 MAX_STEALTH_CONCURRENT = int(os.environ.get("MAX_STEALTH_CONCURRENT", "2"))
 _stealth_semaphore = threading.Semaphore(MAX_STEALTH_CONCURRENT)
 
+# Lock de SPAWN: serializa apenas o boot do subprocess do Playwright driver.
+# Sem isso, múltiplas threads chamando StealthyFetcher.fetch(page_action=...)
+# em paralelo brigam no asyncio.create_subprocess_exec interno do Playwright
+# ("Racing with another loop to spawn a process"). Após o spawn, o fetch
+# real roda concorrente normalmente — só os primeiros ~200ms são serializados.
+_playwright_spawn_lock = threading.Lock()
+
 # Limite de RAM para throttling (MB): acima disso, gc + reduz concurrency
 MEM_THROTTLE_MB = int(os.environ.get("MEM_THROTTLE_MB", "700"))
 
@@ -237,9 +244,16 @@ def fetch_stealth_with_screenshot(url: str) -> tuple[Optional[object], Optional[
 
     Custo: 1 chamada Playwright (mesma do stealth normal) + ~5760 tokens de
     input no LLM por imagem (viewport 1920x1080 com detail=high).
+
+    Concorrência: usa _playwright_spawn_lock para serializar o boot do driver
+    (evita "Racing with another loop to spawn a process") e _stealth_semaphore
+    para limitar instâncias em execução.
     """
     import base64 as _b64
+    import time as _time
+
     screenshot_holder: dict = {"data": None}
+    _MAX_ATTEMPTS = 3
 
     def _capture(page):
         try:
@@ -248,27 +262,52 @@ def fetch_stealth_with_screenshot(url: str) -> tuple[Optional[object], Optional[
         except Exception as err:
             log.debug(f"Screenshot falhou: {err}")
 
-    try:
-        record_browser_call()
-        log.debug(f"Fetch stealth + screenshot: {url}")
-        _stealth_semaphore.acquire()
+    last_err: Optional[Exception] = None
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        page = None
+        screenshot_holder["data"] = None
         try:
-            page = StealthyFetcher.fetch(
-                url,
-                headless=True,
-                network_idle=False,
-                timeout=30000,
-                wait=3000,
-                disable_resources=False,
-                page_action=_capture,
-            )
-        finally:
-            _stealth_semaphore.release()
-            gc.collect()
-        return page, screenshot_holder["data"]
-    except Exception as e:
-        log.warning(f"Fetch+screenshot falhou ({url}): {e}")
-        return None, None
+            record_browser_call()
+            log.debug(f"Fetch stealth + screenshot (tentativa {attempt}/{_MAX_ATTEMPTS}): {url}")
+
+            # 1) Adquire slot de execução (limita instâncias rodando)
+            _stealth_semaphore.acquire()
+            try:
+                # 2) Serializa o SPAWN do driver Playwright. Sem isso, threads
+                #    paralelas brigam no asyncio.create_subprocess_exec interno
+                #    e dão "Racing with another loop to spawn a process".
+                #    O lock só envolve o início da chamada — após o subprocess
+                #    estar de pé, o fetch real roda concorrente normalmente.
+                with _playwright_spawn_lock:
+                    page = StealthyFetcher.fetch(
+                        url,
+                        headless=True,
+                        network_idle=False,
+                        timeout=30000,
+                        wait=3000,
+                        disable_resources=False,
+                        page_action=_capture,
+                    )
+            finally:
+                _stealth_semaphore.release()
+                gc.collect()
+
+            return page, screenshot_holder["data"]
+
+        except Exception as e:
+            last_err = e
+            err_msg = str(e)
+            is_race = "Racing with another loop" in err_msg or "spawn a process" in err_msg
+            if is_race and attempt < _MAX_ATTEMPTS:
+                # Backoff exponencial pequeno + jitter para evitar nova colisão
+                wait_s = 0.5 * attempt + (hash(url) % 100) / 200.0
+                log.debug(f"Spawn race detectado, retry em {wait_s:.1f}s ({attempt}/{_MAX_ATTEMPTS})")
+                _time.sleep(wait_s)
+                continue
+            break
+
+    log.warning(f"Fetch+screenshot falhou ({url}): {last_err}")
+    return None, None
 
 
 def fetch_page_with_scroll(url: str, max_scrolls: int = 50,
@@ -2133,6 +2172,13 @@ def scrape_property_page(
         page, screenshot_b64 = fetch_stealth_with_screenshot(url)
         source = "stealth+vision"
         needed_stealth = True
+        # Fallback: se screenshot capture falhou (race de spawn, timeout etc.),
+        # tenta fetch stealth normal — não perde o imóvel só por não ter vision.
+        if not page:
+            log.debug(f"Vision fetch falhou — fallback stealth sem screenshot: {url}")
+            page = fetch_page(url, stealth=True)
+            screenshot_b64 = None
+            source = "stealth (vision fallback)"
     elif _forced_stealth is True:
         # Domínio confirmado como SPA/JS — pular HTTP diretamente
         page = fetch_page(url, stealth=True)
