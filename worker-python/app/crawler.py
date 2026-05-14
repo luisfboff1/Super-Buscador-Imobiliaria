@@ -30,6 +30,74 @@ from scrapling.fetchers import Fetcher, StealthyFetcher
 from app.benchmark_metrics import record_browser_call, record_http_call, record_strategy, record_timing
 
 
+# ─── Playwright wait-event patch ──────────────────────────────────────────────
+# Scrapling chama page.goto() sem wait_until → Playwright usa default "load",
+# que em SPAs (destak.imb.br, Antonella etc.) NUNCA dispara dentro do timeout
+# porque trackers/analytics ficam carregando indefinidamente. Resultado:
+# Timeout 30000ms exceeded em massa.
+#
+# Patch: trocar default para "domcontentloaded" (DOM parseado, scripts ainda
+# podem estar rodando, mas o conteúdo HTML já está lá — suficiente pra scrape).
+# Também tornar wait_for_load_state(state="load") tolerante a timeout (não
+# levantar exceção, só seguir adiante).
+def _install_playwright_patches() -> None:
+    try:
+        from playwright.sync_api import Page as _SyncPage
+        from playwright.sync_api import TimeoutError as _SyncTimeout
+    except Exception as e:
+        log.warning(f"Não foi possível patchar Playwright sync: {e}")
+        return
+
+    _orig_sync_goto = _SyncPage.goto
+    _orig_sync_wait_load = _SyncPage.wait_for_load_state
+
+    def _patched_sync_goto(self, url, **kwargs):
+        kwargs.setdefault("wait_until", "domcontentloaded")
+        return _orig_sync_goto(self, url, **kwargs)
+
+    def _patched_sync_wait_load(self, state="load", timeout=None):
+        # Para state="load" tolera timeout: muitas vezes load nunca dispara em SPAs
+        if state == "load":
+            try:
+                return _orig_sync_wait_load(self, state=state, timeout=timeout or 8000)
+            except _SyncTimeout:
+                return None
+        return _orig_sync_wait_load(self, state=state, timeout=timeout)
+
+    _SyncPage.goto = _patched_sync_goto
+    _SyncPage.wait_for_load_state = _patched_sync_wait_load
+
+    # Versão async (Scrapling tem caminhos async também)
+    try:
+        from playwright.async_api import Page as _AsyncPage
+        from playwright.async_api import TimeoutError as _AsyncTimeout
+
+        _orig_async_goto = _AsyncPage.goto
+        _orig_async_wait_load = _AsyncPage.wait_for_load_state
+
+        async def _patched_async_goto(self, url, **kwargs):
+            kwargs.setdefault("wait_until", "domcontentloaded")
+            return await _orig_async_goto(self, url, **kwargs)
+
+        async def _patched_async_wait_load(self, state="load", timeout=None):
+            if state == "load":
+                try:
+                    return await _orig_async_wait_load(self, state=state, timeout=timeout or 8000)
+                except _AsyncTimeout:
+                    return None
+            return await _orig_async_wait_load(self, state=state, timeout=timeout)
+
+        _AsyncPage.goto = _patched_async_goto
+        _AsyncPage.wait_for_load_state = _patched_async_wait_load
+    except Exception:
+        pass
+
+    log.info("Playwright patched: goto wait_until=domcontentloaded, wait_for_load_state('load') tolerante")
+
+
+_install_playwright_patches()
+
+
 # Catch unhandled thread exceptions
 def _thread_excepthook(args):
     log.error(f"THREAD CRASH ({args.thread}): {args.exc_type.__name__}: {args.exc_value}")
@@ -54,6 +122,42 @@ PAGINATION_STEALTH_BATCH_SIZE = int(os.environ.get("CRAWL_PAGINATION_STEALTH_BAT
 # Semáforo global: limita instâncias Playwright simultâneas (cada uma ~200MB RAM)
 MAX_STEALTH_CONCURRENT = int(os.environ.get("MAX_STEALTH_CONCURRENT", "2"))
 _stealth_semaphore = threading.Semaphore(MAX_STEALTH_CONCURRENT)
+
+# ── Patch Scrapling: trocar default do goto de "load" → "domcontentloaded" ──
+# Scrapling chama page.goto(url, referer=...) sem wait_until, então o Playwright
+# usa o default ("load"). Em SPAs com analytics/trackers (destak.imb.br, etc.)
+# o evento "load" trava por trackers infinitos → Timeout 30000ms exceeded.
+# DOMContentLoaded é mais que suficiente para scraping (HTML pronto), e o
+# Scrapling AINDA roda _wait_for_page_stability depois com network_idle se ativo.
+# Opt-out: CRAWL_GOTO_WAIT=load para voltar ao comportamento antigo.
+def _patch_scrapling_goto_wait() -> None:
+    wait_until = os.environ.get("CRAWL_GOTO_WAIT", "domcontentloaded")
+    if wait_until == "load":  # opt-out: comportamento original do Playwright
+        return
+    try:
+        from playwright.sync_api import Page as _SyncPage
+        from playwright.async_api import Page as _AsyncPage
+    except Exception as err:
+        log.warning(f"Patch Scrapling goto: playwright indisponível ({err})")
+        return
+    _orig_sync = _SyncPage.goto
+    _orig_async = _AsyncPage.goto
+
+    def _sync_goto(self, url, **kw):
+        kw.setdefault("wait_until", wait_until)
+        return _orig_sync(self, url, **kw)
+
+    async def _async_goto(self, url, **kw):
+        kw.setdefault("wait_until", wait_until)
+        return await _orig_async(self, url, **kw)
+
+    _SyncPage.goto = _sync_goto
+    _AsyncPage.goto = _async_goto
+    log.info(f"Patch Scrapling: page.goto default wait_until='{wait_until}' (era 'load')")
+
+
+_patch_scrapling_goto_wait()
+
 
 # Lock de SPAWN: serializa apenas o boot do subprocess do Playwright driver.
 # Sem isso, múltiplas threads chamando StealthyFetcher.fetch(page_action=...)
