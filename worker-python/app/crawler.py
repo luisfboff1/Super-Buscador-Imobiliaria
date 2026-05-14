@@ -2256,6 +2256,35 @@ def scrape_property_page(
                             log.info(f"  ↳ Stealth melhor: {_fields2} vs {_fields} campos")
                     del html2
 
+    # ── Vision-on-suspect: re-extrai SÓ campos suspeitos com screenshot ──
+    # Disparado por CRAWL_VISION_ON_SUSPECT=1. Custo: 1 fetch extra com
+    # screenshot + 1 chamada LLM com vision — APENAS quando o resultado
+    # tem valores que claramente não fazem sentido (area>1000m² em apto,
+    # banheiros>8, preço>R$50M etc.). Economia massiva vs vision em 100%.
+    if (
+        result
+        and os.environ.get("CRAWL_VISION_ON_SUSPECT", "0") == "1"
+        and screenshot_b64 is None  # ainda não foi feito vision na 1a passada
+    ):
+        from app.extractor import _looks_suspect, _llm_heal_missing_fields, _merge_results
+        suspect, reasons, fields_to_reset = _looks_suspect(result)
+        if suspect:
+            log.info(f"  ⚠ Suspeito ({reasons}) — re-extraindo com vision")
+            # Zera campos suspeitos para forçar heal a re-extraí-los
+            for f in fields_to_reset:
+                setattr(result, f, None)
+            # Segundo fetch só para o screenshot (raro, custo aceitável)
+            _, suspect_screenshot = fetch_stealth_with_screenshot(url)
+            if suspect_screenshot:
+                healed = _llm_heal_missing_fields(
+                    html, url, result, screenshot_b64=suspect_screenshot
+                )
+                if healed:
+                    result = _merge_results(result, healed)
+                    fixed = [f for f in fields_to_reset if getattr(result, f) is not None]
+                    if fixed:
+                        log.info(f"  ✓ Vision corrigiu: {', '.join(fixed)}")
+
     del html  # Release HTML string after extraction
 
     elapsed = time.time() - start

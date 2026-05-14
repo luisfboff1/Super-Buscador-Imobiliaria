@@ -1551,6 +1551,67 @@ def _missing_fields(result: Optional[ImovelInput]) -> list[str]:
     return [f for f in _ALL_DATA_FIELDS if getattr(result, f) is None]
 
 
+# ─── Detecção de valores suspeitos (gatilho para vision opcional) ────────────
+
+_RESIDENCIAL_TIPOS = frozenset({
+    "apartamento", "casa", "kitnet", "studio", "cobertura", "sobrado",
+    "duplex", "triplex", "flat", "loft",
+})
+
+
+def _looks_suspect(result: Optional[ImovelInput]) -> tuple[bool, str, list[str]]:
+    """
+    Heurísticas baratas para detectar campos que QUASE CERTO foram extraídos
+    errado. Retorna (eh_suspeito, razoes, campos_para_resetar).
+
+    Quando suspeito, o caller pode optar por re-extrair só esses campos com
+    vision habilitado — economiza chamadas de vision em massa.
+    """
+    if result is None:
+        return False, "", []
+
+    reasons: list[str] = []
+    fields_to_reset: list[str] = []
+
+    tipo = (result.tipo or "").lower()
+
+    # Área absurda para imóvel residencial → quase certo é área do empreendimento/lazer
+    if tipo in _RESIDENCIAL_TIPOS and result.area_m2 and result.area_m2 > 1000:
+        reasons.append(f"area_m2={result.area_m2:.0f} muito alta para {tipo}")
+        fields_to_reset.append("area_m2")
+
+    # Banheiros do condomínio caindo no imóvel
+    if result.banheiros and result.banheiros > 8:
+        reasons.append(f"banheiros={result.banheiros} suspeito (provável condomínio)")
+        fields_to_reset.append("banheiros")
+
+    # Vagas absurdas
+    if result.vagas and result.vagas > 10:
+        reasons.append(f"vagas={result.vagas} suspeito")
+        fields_to_reset.append("vagas")
+
+    # Quartos absurdos para residencial
+    if tipo in _RESIDENCIAL_TIPOS and result.quartos and result.quartos > 10:
+        reasons.append(f"quartos={result.quartos} suspeito para {tipo}")
+        fields_to_reset.append("quartos")
+
+    # Preço astronômico (provável typo no CRM da imobiliária)
+    if result.preco and result.preco > 50_000_000:
+        reasons.append(f"preco=R${result.preco:,.0f} suspeito")
+        fields_to_reset.append("preco")
+
+    # Bairro com texto que NÃO é nome geográfico (já filtramos em _sanitize_location,
+    # mas se sobreviveu — provavelmente é lixo)
+    if result.bairro and (
+        " | " in result.bairro
+        or result.bairro.lower() in {"imovel", "imóvel", "anúncio", "anuncio", "detalhe"}
+    ):
+        reasons.append(f"bairro={result.bairro!r} parece lixo")
+        fields_to_reset.append("bairro")
+
+    return bool(reasons), "; ".join(reasons), fields_to_reset
+
+
 # ─── Campos esperados por tipo de imóvel (para self-healing do template) ─────
 # Quando o template extrai um imóvel desse tipo mas campo está nulo → LLM corrige
 _FIELDS_EXPECTED_BY_TIPO: dict[str, set] = {
