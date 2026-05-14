@@ -13,10 +13,11 @@ quartos, banheiros, vagas, area, bairro, descricao). Queremos o máximo de dados
 import os
 import re
 import json
-from typing import Optional
+from typing import Optional, Literal
 
 from bs4 import BeautifulSoup
 from openai import OpenAI
+from pydantic import BaseModel, Field
 
 from app.benchmark_metrics import record_llm_call, timed_step
 from app.db import ImovelInput
@@ -28,6 +29,12 @@ log = get_logger("extractor")
 
 _openai_client: Optional[OpenAI] = None
 
+# Modelo principal (vision-capable + structured outputs strict).
+# gpt-5.4-mini: $0.75/M in, $4.50/M out, suporta vision e reasoning.
+# Override via env: CRAWL_LLM_MODEL=gpt-5.4 para casos difíceis.
+LLM_MODEL = os.environ.get("CRAWL_LLM_MODEL", "gpt-5.4-mini")
+LLM_REASONING = os.environ.get("CRAWL_LLM_REASONING", "minimal")  # minimal|low|medium|high
+
 
 def _get_openai() -> OpenAI:
     global _openai_client
@@ -37,6 +44,61 @@ def _get_openai() -> OpenAI:
             raise RuntimeError("OPENAI_API_KEY não configurada")
         _openai_client = OpenAI(api_key=api_key)
     return _openai_client
+
+
+# ─── Pydantic schemas para structured outputs strict ─────────────────────────
+# OpenAI client.chat.completions.parse() força o modelo a retornar JSON válido
+# conforme o schema. Elimina alucinações de formato e fields fora do tipo.
+
+_TIPO_VALUES = Literal[
+    "casa", "apartamento", "terreno", "comercial", "rural", "cobertura",
+    "kitnet", "sobrado", "flat", "loft", "galpao", "sala", "loja",
+    "chacara", "predio", "box", "barracao", "duplex", "triplex",
+    "condominio", "pavilhao", "outro",
+]
+_TRANSACAO_VALUES = Literal["venda", "aluguel", "ambos"]
+
+
+class ImovelExtraidoLLM(BaseModel):
+    """Schema strict para extração completa via LLM."""
+    titulo: Optional[str] = Field(default=None)
+    tipo: Optional[_TIPO_VALUES] = Field(default=None)
+    transacao: Optional[_TRANSACAO_VALUES] = Field(default=None)
+    cidade: Optional[str] = Field(default=None)
+    bairro: Optional[str] = Field(
+        default=None,
+        description="Nome do bairro/loteamento (max 60 chars). NUNCA o título inteiro ou nome da imobiliária.",
+    )
+    estado: Optional[str] = Field(default=None, description="Sigla UF de 2 letras")
+    preco: Optional[float] = Field(default=None, description="Preço de VENDA em reais (número puro, sem R$)")
+    area_m2: Optional[float] = Field(
+        default=None,
+        description="Área PRIVATIVA/ÚTIL do imóvel em m². NÃO usar área do empreendimento, condomínio nem terreno (a menos que o imóvel SEJA terreno).",
+    )
+    quartos: Optional[int] = Field(default=None, description="Total de quartos/dormitórios (incluindo suítes)")
+    banheiros: Optional[int] = Field(
+        default=None,
+        description="Banheiros DO imóvel (social/suíte/lavabo). NÃO contar banheiros do condomínio.",
+    )
+    vagas: Optional[int] = Field(default=None, description="Vagas de garagem do imóvel")
+    descricao: Optional[str] = Field(default=None, description="Resumo da descrição (max 500 chars)")
+
+
+class ImovelHealedLLM(BaseModel):
+    """Schema enxuto para healing — só campos que precisam ser preenchidos."""
+    preco: Optional[float] = None
+    area_m2: Optional[float] = None
+    quartos: Optional[int] = None
+    banheiros: Optional[int] = None
+    vagas: Optional[int] = None
+    bairro: Optional[str] = None
+    cidade: Optional[str] = None
+
+
+class LocLLM(BaseModel):
+    """Schema mínimo para extrair bairro/cidade do título."""
+    bairro: Optional[str] = None
+    cidade: Optional[str] = None
 
 
 # ─── LLM universal: OpenAI gpt-5-nano ──────────────────────────────────────────
@@ -84,63 +146,234 @@ def _llm_chat(
         return None
 
 
+# ─── Structured outputs via Pydantic strict ──────────────────────────────────
+
+def _llm_chat_parsed(
+    messages: list[dict],
+    schema_cls: type[BaseModel],
+    *,
+    model: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
+    image_b64: Optional[str] = None,
+    max_tokens: Optional[int] = None,
+) -> Optional[BaseModel]:
+    """
+    Chama o LLM com response_format=Pydantic e retorna a instância parseada
+    (já validada pelo OpenAI strict mode + pydantic). Elimina o `re.search(\\{...\\})`
+    + `json.loads` manual e impede valores fora do schema.
+
+    Se `image_b64` for fornecido, injeta como conteúdo de imagem na ÚLTIMA
+    mensagem user — usado para extração com vision quando o screenshot do
+    detalhe está disponível.
+    """
+    import time as _time
+    _t0 = _time.monotonic()
+
+    # Injeta imagem se fornecida — converte content string em multimodal
+    if image_b64 and messages:
+        msgs = [dict(m) for m in messages]
+        last = msgs[-1]
+        if isinstance(last.get("content"), str):
+            last["content"] = [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{image_b64}"},
+                },
+                {"type": "text", "text": last["content"]},
+            ]
+        messages = msgs
+
+    try:
+        record_llm_call()
+        client = _get_openai()
+        kwargs: dict = dict(
+            model=model or LLM_MODEL,
+            messages=messages,
+            response_format=schema_cls,
+            reasoning_effort=reasoning_effort or LLM_REASONING,
+        )
+        if max_tokens is not None:
+            kwargs["max_completion_tokens"] = max_tokens
+
+        resp = client.chat.completions.parse(**kwargs)
+        elapsed = _time.monotonic() - _t0
+        choice = resp.choices[0]
+        usage = resp.usage
+        tokens_in = usage.prompt_tokens if usage else 0
+        tokens_out = usage.completion_tokens if usage else 0
+        finish = choice.finish_reason
+        vision_tag = " +vision" if image_b64 else ""
+        log.info(
+            f"[llm-parsed{vision_tag}] {kwargs['model']} finish={finish} "
+            f"tokens={tokens_in}→{tokens_out} time={elapsed:.1f}s"
+        )
+
+        if choice.message.refusal:
+            log.warning(f"[llm-parsed] modelo recusou: {choice.message.refusal}")
+            return None
+
+        return choice.message.parsed
+    except Exception as err:
+        elapsed = _time.monotonic() - _t0
+        err_type = type(err).__name__
+        log.warning(f"[llm-parsed] {err_type} após {elapsed:.1f}s: {err}")
+        return None
+
+
+# ─── Candidate-then-pick: pré-extrai todos os números, LLM escolhe ───────────
+
+def _collect_numeric_candidates(html: str) -> dict[str, list]:
+    """
+    Pré-extrai TODOS os candidatos numéricos da página (área, preço, quartos,
+    banheiros, vagas). O LLM recebe a lista e ESCOLHE entre eles — não inventa.
+
+    Reduz drasticamente alucinação tipo "área = 10.000 m²" quando o número
+    real era "1.090 m²" mas o modelo confundiu separador de milhar.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    for tag in soup.find_all(["script", "style", "nav", "footer", "noscript"]):
+        tag.decompose()
+    text = soup.get_text(" ", strip=True).lower()
+
+    candidates: dict[str, list] = {}
+
+    # Áreas em m²
+    areas: list[float] = []
+    for m in re.finditer(r"(\d[\d.,]*)\s*m[²2]\b", text):
+        try:
+            v = float(m.group(1).replace(".", "").replace(",", "."))
+            if 10 < v < 100_000:
+                areas.append(v)
+        except ValueError:
+            continue
+    if areas:
+        candidates["area_m2"] = sorted({round(a, 2) for a in areas})
+
+    # Preços R$
+    precos: list[float] = []
+    for m in re.finditer(r"r\$\s*([\d.,]+)", text):
+        try:
+            v = float(m.group(1).replace(".", "").replace(",", "."))
+            if 10_000 < v < 500_000_000:
+                precos.append(v)
+        except ValueError:
+            continue
+    if precos:
+        candidates["preco"] = sorted({round(p, 2) for p in precos})
+
+    # Quartos / banheiros / vagas — todos os pares (n, label)
+    for field, pattern in [
+        ("quartos", r"(\d+)\s*(?:quartos?|dormit[óo]rios?|dorms?)"),
+        ("banheiros", r"(\d+)\s*(?:banheiros?|bwc|wcs?|lavabos?)"),
+        ("vagas", r"(\d+)\s*(?:vagas?|garagens?)"),
+    ]:
+        vals: list[int] = []
+        for m in re.finditer(pattern, text):
+            try:
+                v = int(m.group(1))
+                if 0 < v <= 20:
+                    vals.append(v)
+            except ValueError:
+                continue
+        if vals:
+            candidates[field] = sorted(set(vals))
+
+    return candidates
+
+
 # ─── 1. Extração de imagens via BeautifulSoup ────────────────────────────────
 
 def extract_images(html: str) -> list[str]:
-    """Extrai URLs de imagens do HTML (sem LLM)."""
+    """
+    Extrai URLs de imagens do HTML, com ranking:
+    1. og:image / twitter:image / link[rel=image_src] — SEO padrão = foto principal
+    2. <img> dentro de <figure>/<picture>/galeria — alta probabilidade de ser do imóvel
+    3. <img> restantes (filtrando logo/icon/banner/sprite/avatar/footer)
+
+    A ordem é PRESERVADA: o primeiro item é a foto principal.
+    """
     soup = BeautifulSoup(html, "lxml")
-    urls: set[str] = set()
+    ordered: list[str] = []
+    seen: set[str] = set()
 
-    for img in soup.find_all("img"):
-        src = img.get("src") or img.get("data-src") or img.get("data-lazy-src") or img.get("data-original")
-        if src and src.startswith("http") and not re.search(r"logo|icon|banner|avatar|sprite", src, re.I):
-            urls.add(src)
+    def _add(u: Optional[str]) -> None:
+        if not u:
+            return
+        u = u.strip()
+        if not u.startswith("http") or u in seen:
+            return
+        if re.search(r"logo|icon|banner|avatar|sprite|footer|placeholder|blank\.", u, re.I):
+            return
+        seen.add(u)
+        ordered.append(u)
 
+    # 1. Imagens SEO/social — quase sempre a foto principal do imóvel
     for meta in soup.find_all("meta", property="og:image"):
-        content = meta.get("content", "")
-        if content.startswith("http"):
-            urls.add(content)
+        _add(meta.get("content", ""))
+    for meta in soup.find_all("meta", attrs={"name": "twitter:image"}):
+        _add(meta.get("content", ""))
+    for meta in soup.find_all("meta", attrs={"name": "twitter:image:src"}):
+        _add(meta.get("content", ""))
+    for link in soup.find_all("link", rel="image_src"):
+        _add(link.get("href", ""))
 
-    return list(urls)[:30]
+    # 2. Imagens dentro de figure/picture/galeria — provavelmente da galeria do imóvel
+    gallery_containers = soup.find_all(
+        ["figure", "picture"]
+    ) + soup.select("[class*='galer'], [class*='galler'], [class*='slider'], [class*='carousel'], [class*='swiper']")
+    for container in gallery_containers:
+        for img in container.find_all("img"):
+            src = (
+                img.get("src")
+                or img.get("data-src")
+                or img.get("data-lazy-src")
+                or img.get("data-original")
+            )
+            _add(src)
+
+    # 3. Demais <img> (filtro de ruído já no _add)
+    for img in soup.find_all("img"):
+        src = (
+            img.get("src")
+            or img.get("data-src")
+            or img.get("data-lazy-src")
+            or img.get("data-original")
+        )
+        _add(src)
+
+    return ordered[:30]
 
 
 # ─── Micro-LLM: extrai bairro/cidade APENAS do título (pós-processamento do template) ────────
 
 def _llm_locate_from_titulo(titulo: str, url: str) -> Optional[ImovelInput]:
     """
-    Micro-chamada LLM: extrai bairro e cidade a partir SOMENTE do título.
-    Usada no fast path do template quando bairro/cidade ficam nulos.
-    Funciona para qualquer site cujo título contenha localização (padrão BR comum).
+    Micro-chamada LLM (strict JSON via Pydantic): extrai bairro e cidade
+    a partir SOMENTE do título. Usada no fast path do template.
     """
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "Você extrai bairro e cidade de títulos de imóveis brasileiros. "
-                "Retorne SOMENTE JSON: {\"bairro\": \"...\", \"cidade\": \"...\"}. "
-                "Use null para campos ausentes. Sem explicações. "
-                "Padrão comum: \"Tipo à venda, R$ X, Bairro em Cidade | Imob\". "
-                "Bairro deve ser nome geográfico real (máx 60 chars)."
-            ),
-        },
-        {"role": "user", "content": f"Título: {titulo[:300]}"},
-    ]
-    # Resposta curtíssima: apenas {"bairro": "...", "cidade": "..."}
-    raw = _llm_chat(messages, max_tokens=150)
-    if not raw:
+    parsed = _llm_chat_parsed(
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Você extrai bairro e cidade de títulos de imóveis brasileiros. "
+                    "Padrão comum: 'Tipo à venda, R$ X, Bairro em Cidade | Imobiliária'. "
+                    "Bairro deve ser nome geográfico real (máx 60 chars). "
+                    "Use null se não tiver certeza — NUNCA chute."
+                ),
+            },
+            {"role": "user", "content": f"Título: {titulo[:300]}"},
+        ],
+        schema_cls=LocLLM,
+        max_tokens=150,
+    )
+    if not parsed:
         return None
-    try:
-        m = re.search(r"\{[^}]+\}", raw, re.S)
-        if not m:
-            return None
-        data = json.loads(m.group())
-        bairro = _sanitize_location(data.get("bairro")) if data.get("bairro") and data["bairro"] != "null" else None
-        cidade = _sanitize_location(data.get("cidade")) if data.get("cidade") and data["cidade"] != "null" else None
-        if not bairro and not cidade:
-            return None
-        return ImovelInput(url_anuncio=url, bairro=bairro, cidade=cidade)
-    except Exception:
+    bairro = _sanitize_location(parsed.bairro) if parsed.bairro else None
+    cidade = _sanitize_location(parsed.cidade) if parsed.cidade else None
+    if not bairro and not cidade:
         return None
+    return ImovelInput(url_anuncio=url, bairro=bairro, cidade=cidade)
 
 
 # ─── Sanitização de localização (cidade/bairro) ──────────────────────────────
@@ -1196,64 +1429,93 @@ def html_to_clean_text(html: str) -> str:
     return text.strip()
 
 
-def extract_via_llm(html: str, url: str) -> Optional[ImovelInput]:
-    """Extrai dados via OpenAI gpt-5-nano."""
-    clean_text = html_to_clean_text(html)
+def extract_via_llm(
+    html: str,
+    url: str,
+    *,
+    screenshot_b64: Optional[str] = None,
+) -> Optional[ImovelInput]:
+    """
+    Extrai dados via LLM com structured outputs strict (Pydantic).
 
+    Melhorias sobre a versão antiga:
+    1. response_format=Pydantic → fim do `re.search(\\{...\\})` e json.loads manual.
+       O modelo é FORÇADO a retornar JSON válido conforme o schema.
+    2. Candidates pré-extraídos por regex → o modelo ESCOLHE entre números
+       reais da página em vez de inventar (mata "área = 10.000 m²").
+    3. screenshot_b64 opcional → quando disponível, o modelo VÊ o card do
+       imóvel com vision (gpt-5.4-mini suporta vision nativamente).
+    """
+    clean_text = html_to_clean_text(html)
     if len(clean_text) < 100:
         log.debug(f"Texto muito curto para LLM: {url} ({len(clean_text)} chars)")
         return None
 
-    try:
-        text = _llm_chat(
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        SYSTEM_PROMPT
-                        + f"\n\nResponda APENAS com um objeto JSON válido seguindo este schema:\n{SCHEMA_GUIDE}\n"
-                        + "Nenhum texto antes ou depois do JSON."
-                    ),
-                },
-                {"role": "user", "content": f"URL: {url}\n\n{clean_text}"},
-            ],
-        )
+    candidates = _collect_numeric_candidates(html)
+    candidates_str = (
+        json.dumps(candidates, ensure_ascii=False)
+        if candidates else "{} (nenhum candidato pré-extraído — extrair do texto)"
+    )
 
-        if not text:
-            log.warning(f"✗ LLM sem resposta — {url}")
-            return None
+    parsed = _llm_chat_parsed(
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    SYSTEM_PROMPT
+                    + "\n\nREGRA CRÍTICA — candidate-then-pick:\n"
+                    "Para campos numéricos (preco, area_m2, quartos, banheiros, vagas) você "
+                    "receberá uma lista de CANDIDATOS pré-extraídos da página. "
+                    "ESCOLHA o valor correto APENAS entre eles. "
+                    "Se nenhum candidato bate com o imóvel principal, retorne null — "
+                    "NUNCA invente um número fora da lista."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"URL: {url}\n\n"
+                    f"CANDIDATOS NUMÉRICOS pré-extraídos da página (escolha entre eles):\n"
+                    f"{candidates_str}\n\n"
+                    f"TEXTO DA PÁGINA:\n{clean_text}"
+                ),
+            },
+        ],
+        schema_cls=ImovelExtraidoLLM,
+        image_b64=screenshot_b64,
+    )
 
-        # Extrair JSON da resposta
-        json_match = re.search(r"\{[\s\S]*\}", text)
-        if not json_match:
-            log.warning(f"✗ Sem JSON na resposta LLM — {url}")
-            return None
-
-        data = json.loads(json_match.group())
-
-        result = ImovelInput(
-            url_anuncio=url,
-            titulo=data.get("titulo"),
-            tipo=data.get("tipo") if data.get("tipo") in VALID_TIPOS else None,
-            transacao=data.get("transacao"),
-            cidade=_sanitize_location(data.get("cidade")),
-            bairro=_sanitize_location(data.get("bairro")),
-            estado=data.get("estado"),
-            preco=float(data["preco"]) if data.get("preco") and float(data["preco"]) > 1000 else None,
-            area_m2=float(data["areaM2"]) if data.get("areaM2") and float(data["areaM2"]) > 0 else None,
-            quartos=int(data["quartos"]) if data.get("quartos") and int(data["quartos"]) > 0 else None,
-            banheiros=int(data["banheiros"]) if data.get("banheiros") and int(data["banheiros"]) > 0 else None,
-            vagas=int(data["vagas"]) if data.get("vagas") and int(data["vagas"]) > 0 else None,
-            descricao=data.get("descricao"),
-        )
-
-        preco_str = f"R${result.preco:,.0f}" if result.preco else "s/preço"
-        log.info(f"✓ [llm] {result.titulo or url[:40]} — {preco_str} — {result.bairro or '?'}")
-        return result
-
-    except Exception as e:
-        log.error(f"✗ LLM falhou para {url}: {e}")
+    if not parsed:
+        log.warning(f"✗ LLM sem resposta — {url}")
         return None
+
+    tipo = parsed.tipo if parsed.tipo in VALID_TIPOS else None
+    preco = parsed.preco if parsed.preco and parsed.preco > 1000 else None
+    area = parsed.area_m2 if parsed.area_m2 and parsed.area_m2 > 0 else None
+    quartos = parsed.quartos if parsed.quartos and parsed.quartos > 0 else None
+    banheiros = parsed.banheiros if parsed.banheiros and parsed.banheiros > 0 else None
+    vagas = parsed.vagas if parsed.vagas and parsed.vagas > 0 else None
+    estado = (parsed.estado or "")[-2:].upper() if parsed.estado else None
+
+    result = ImovelInput(
+        url_anuncio=url,
+        titulo=parsed.titulo,
+        tipo=tipo,
+        transacao=parsed.transacao,
+        cidade=_sanitize_location(parsed.cidade),
+        bairro=_sanitize_location(parsed.bairro),
+        estado=estado,
+        preco=preco,
+        area_m2=area,
+        quartos=quartos,
+        banheiros=banheiros,
+        vagas=vagas,
+        descricao=(parsed.descricao or None) if not parsed.descricao or len(parsed.descricao) >= 10 else None,
+    )
+
+    preco_str = f"R${result.preco:,.0f}" if result.preco else "s/preço"
+    log.info(f"✓ [llm-parsed] {result.titulo or url[:40]} — {preco_str} — {result.bairro or '?'}")
+    return result
 
 
 # ─── Merge helper ─────────────────────────────────────────────────────────────
@@ -1378,150 +1640,140 @@ def _llm_heal_missing_fields(
     html: str,
     url: str,
     result: ImovelInput,
+    *,
+    screenshot_b64: Optional[str] = None,
 ) -> Optional[ImovelInput]:
     """
-    LLM focada: dado um imóvel parcialmente extraído, preenche APENAS
-    os campos esperados para aquele tipo mas ainda nulos.
+    LLM focada com structured outputs strict (Pydantic) + candidate-then-pick.
 
-    Se preencher, o chamador deve atualizar o template com os novos selectors
-    para que as próximas páginas não precisem de LLM (self-healing).
+    Para um imóvel parcialmente extraído, preenche APENAS os campos esperados
+    para o tipo dele mas ainda nulos.
+
+    Novas garantias vs. versão antiga:
+    1. response_format=ImovelHealedLLM → modelo NÃO PODE retornar tipo errado
+       (int onde esperava float, string onde esperava número).
+    2. Candidatos numéricos da página → modelo escolhe entre valores reais,
+       não inventa "10000 m²" quando a página tem "1.090 m²".
+    3. screenshot_b64 opcional → vision para validar campos visualmente
+       quando o caller dispõe do print da página.
     """
     tipo = result.tipo
-    # Se tipo ainda não foi extraído, tenta inferir da URL (ex: /imovel/casa/ → casa)
     if not tipo:
         tipo = _detect_tipo("", url.replace("-", " ").replace("/", " "))
 
     if tipo:
         expected = _FIELDS_EXPECTED_BY_TIPO.get(tipo.lower(), set())
     else:
-        # Sem tipo, ainda tenta preencher campos numéricos e localização
         expected = {"quartos", "banheiros", "vagas", "area_m2", "preco", "bairro", "cidade"}
 
     if not expected:
         return None
 
-    # Identifica campos que deveriam estar presentes mas estão nulos
-    truly_missing = [
-        f for f in expected
-        if getattr(result, f, None) is None
-    ]
+    truly_missing = [f for f in expected if getattr(result, f, None) is None]
     if not truly_missing:
-        return None  # já completo para o tipo, sem necessidade de LLM
+        return None
 
-    # Contexto já extraído (ajuda o LLM a não duplicar esforço)
+    # Candidatos pré-extraídos (filtrados pelos campos que faltam)
+    all_candidates = _collect_numeric_candidates(html)
+    candidates = {k: v for k, v in all_candidates.items() if k in truly_missing}
+    candidates_str = json.dumps(candidates, ensure_ascii=False) if candidates else "{}"
+
+    # Contexto já extraído
     found_ctx = {
-        "titulo":   result.titulo,
-        "tipo":     tipo,
+        "titulo": result.titulo,
+        "tipo": tipo,
         "transacao": result.transacao,
-        "preco":    result.preco,
-        "bairro":   result.bairro,
-        "cidade":   result.cidade,
+        "preco": result.preco,
+        "bairro": result.bairro,
+        "cidade": result.cidade,
     }
-    found_str = ", ".join(
-        f'{k}="{v}"' for k, v in found_ctx.items() if v is not None
-    )
-
-    field_desc = {
-        "preco":    "preço numérico em reais (ex: 850000)",
-        "bairro":   "nome do bairro ou loteamento (máx 60 chars)",
-        "cidade":   "nome da cidade",
-        "quartos":  "total de quartos/dormitórios (inteiro) — inclui suítes",
-        "banheiros": "total de banheiros/WC/lavabos (inteiro)",
-        "vagas":    "total de vagas de garagem (inteiro) — 'Garagem p/ 2 Carros' = 2",
-        "area_m2":  "área em m² (número float)",
-    }
-    missing_desc = "; ".join(
-        f'"{f}" ({field_desc.get(f, f)})' for f in truly_missing
-    )
+    found_str = ", ".join(f'{k}="{v}"' for k, v in found_ctx.items() if v is not None)
 
     clean_text = html_to_clean_text(html)
-    # Também inclui a descricao já extraída se existir — ela tem os dados!
     descricao_hint = ""
     if result.descricao and len(result.descricao) > 10:
         descricao_hint = f"\nDESCRIÇÃO JÁ EXTRAÍDA (leia com atenção): {result.descricao}"
     if len(clean_text) < 50 and not descricao_hint:
         return None
 
-    schema_fields: dict = {}
-    for f in truly_missing:
-        if f in ("quartos", "banheiros", "vagas"):
-            schema_fields[f] = "integer or null"
-        elif f in ("preco", "area_m2"):
-            schema_fields[f] = "number or null"
-        else:
-            schema_fields[f] = "string or null"
-
     tipo_str = tipo.upper() if tipo else "DESCONHECIDO"
-    try:
-        text = _llm_chat(
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Você é um extrator especialista em imóveis brasileiros. "
-                        "Analise o texto e extraia os campos solicitados. "
-                        "LEIA TODA A DESCRIÇÃO — ela usa '; ' como separador: "
-                        "'4 Dormitórios sendo 1 Suíte; 2 Banheiros Sociais; Garagem p/ 2 Carros' → quartos=4, banheiros=2, vagas=2. "
-                        "'Garagem p/ N Carros' significa N vagas. "
-                        "Para bairro: verifique URL (/imovel/tipo/cidade/bairro/id) e converta slug. "
-                        "Retorne APENAS JSON válido. Nenhum texto fora do JSON."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"URL: {url}\n"
-                        f"Tipo de imóvel: {tipo_str}\n"
-                        f"Já encontramos: {found_str}{descricao_hint}\n\n"
-                        f"Extraia APENAS estes campos que estão faltando: {missing_desc}\n"
-                        f"Schema: {json.dumps(schema_fields)}\n\n"
-                        f"Texto da página:\n{clean_text[:3000]}"
-                    ),
-                },
-            ],
-        )
+    missing_list = ", ".join(truly_missing)
 
-        if not text:
-            return None
+    parsed = _llm_chat_parsed(
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Você é um extrator especialista em imóveis brasileiros. "
+                    "LEIA TODA A DESCRIÇÃO — usa '; ' como separador. "
+                    "Ex: '4 Dormitórios sendo 1 Suíte; 2 Banheiros Sociais; Garagem p/ 2 Carros' "
+                    "→ quartos=4, banheiros=2, vagas=2. "
+                    "'Garagem p/ N Carros' = N vagas. "
+                    "Para bairro: confira a URL (/imovel/tipo/cidade/bairro/id) e converta slug. "
+                    "\n\nREGRA CRÍTICA — candidate-then-pick:\n"
+                    "Para campos numéricos (preco, area_m2, quartos, banheiros, vagas) você "
+                    "receberá uma lista de CANDIDATOS pré-extraídos. ESCOLHA o correto entre "
+                    "eles. Se nenhum bate com o imóvel principal, retorne null — NUNCA invente "
+                    "número fora da lista. Para area_m2, preferir área PRIVATIVA/ÚTIL, não "
+                    "área do empreendimento/condomínio."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"URL: {url}\n"
+                    f"Tipo de imóvel: {tipo_str}\n"
+                    f"Já encontramos: {found_str}{descricao_hint}\n\n"
+                    f"Preencha APENAS estes campos faltantes: {missing_list}\n"
+                    f"Para os demais campos do schema, retorne null.\n\n"
+                    f"CANDIDATOS NUMÉRICOS pré-extraídos (escolha entre eles):\n"
+                    f"{candidates_str}\n\n"
+                    f"Texto da página:\n{clean_text[:3000]}"
+                ),
+            },
+        ],
+        schema_cls=ImovelHealedLLM,
+        image_b64=screenshot_b64,
+    )
 
-        json_match = re.search(r"\{[\s\S]*\}", text)
-        if not json_match:
-            return None
+    if not parsed:
+        return None
 
-        data = json.loads(json_match.group())
-        healed = ImovelInput(url_anuncio=url)
+    healed = ImovelInput(url_anuncio=url)
 
-        for f in truly_missing:
-            val = data.get(f)
-            if val is None:
-                continue
-            try:
-                if f in ("quartos", "banheiros", "vagas"):
-                    v = int(val)
-                    if v > 0:
-                        setattr(healed, f, v)
-                elif f == "preco":
-                    v = float(val)
-                    if v > 1000:
-                        setattr(healed, f, v)
-                elif f == "area_m2":
-                    v = float(val)
-                    if v > 0:
-                        setattr(healed, f, v)
-                else:
-                    s = str(val).strip()
-                    if s:
-                        setattr(healed, f, _sanitize_location(s) if f in ("bairro", "cidade") else s)
-            except (ValueError, TypeError):
-                continue
+    for f in truly_missing:
+        val = getattr(parsed, f, None)
+        if val is None:
+            continue
+        try:
+            if f in ("quartos", "banheiros", "vagas"):
+                v = int(val)
+                if 0 < v <= 20:
+                    setattr(healed, f, v)
+            elif f == "preco":
+                v = float(val)
+                if v > 1000:
+                    setattr(healed, f, v)
+            elif f == "area_m2":
+                v = float(val)
+                if v > 0:
+                    setattr(healed, f, v)
+            elif f in ("bairro", "cidade"):
+                s = _sanitize_location(str(val))
+                if s:
+                    setattr(healed, f, s)
+            else:
+                s = str(val).strip()
+                if s:
+                    setattr(healed, f, s)
+        except (ValueError, TypeError):
+            continue
 
-        filled = [f for f in truly_missing if getattr(healed, f, None) is not None]
-        if filled:
-            log.info(f"  🔧 [heal] {tipo} | preencheu: {', '.join(filled)} — {url[-50:]}")
-            return healed
-
-    except Exception as e:
-        log.debug(f"  [heal] LLM falhou: {e}")
+    filled = [f for f in truly_missing if getattr(healed, f, None) is not None]
+    if filled:
+        vision_tag = " +vision" if screenshot_b64 else ""
+        log.info(f"  🔧 [heal{vision_tag}] {tipo} | preencheu: {', '.join(filled)} — {url[-50:]}")
+        return healed
 
     return None
 
@@ -1534,6 +1786,8 @@ def extract_property_data(
     fallback_cidade: Optional[str] = None,
     fallback_estado: Optional[str] = None,
     template: Optional['SiteTemplate'] = None,
+    *,
+    screenshot_b64: Optional[str] = None,
 ) -> Optional[ImovelInput]:
     """
     Pipeline completa de extração de um imóvel.
@@ -1670,7 +1924,7 @@ def extract_property_data(
                     )
 
             # ── Self-healing: campos ainda nulos → LLM preenche + atualiza template
-            healed = _llm_heal_missing_fields(html, url, tpl_result)
+            healed = _llm_heal_missing_fields(html, url, tpl_result, screenshot_b64=screenshot_b64)
             if healed:
                 tpl_result = _merge_results(tpl_result, healed)
                 # Tenta achar selectors CSS para os novos valores e atualiza template
@@ -1739,7 +1993,7 @@ def extract_property_data(
             template.llm_calls += 1
         log.info(f"  ⚡ {len(missing)} faltando ({', '.join(missing[:5])}) — LLM...")
         with timed_step("extract_llm_ms"):
-            llm_result = extract_via_llm(html, url)
+            llm_result = extract_via_llm(html, url, screenshot_b64=screenshot_b64)
         if llm_result:
             if result is None:
                 result = llm_result

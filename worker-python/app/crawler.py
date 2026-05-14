@@ -187,10 +187,10 @@ def is_detail_page_url(url: str, base_hostname: str) -> bool:
 def fetch_page(url: str, stealth: bool = False) -> Optional[object]:
     """
     Faz fetch de uma página.
-    
+
     - stealth=False: Fetcher rápido (HTTP, sem browser)
     - stealth=True: StealthyFetcher (Playwright stealth)
-    
+
     Stealth usa network_idle=False + wait=3000ms para evitar espera por
     analytics/trackers (economia de ~25s em sites pesados como Bassanesi)
     mas ainda dando tempo para SPAs renderizarem (Antonella, etc).
@@ -225,6 +225,50 @@ def fetch_page(url: str, stealth: bool = False) -> Optional[object]:
     except Exception as e:
         log.warning(f"Fetch falhou ({url}): {e}")
         return None
+
+
+def fetch_stealth_with_screenshot(url: str) -> tuple[Optional[object], Optional[str]]:
+    """
+    Stealth fetch + screenshot da viewport em base64. Retorna (page, b64 ou None).
+
+    Usado quando CRAWL_VISION_ENABLED=1 — o screenshot é passado para o LLM
+    junto com o HTML, permitindo extração com vision (gpt-5.4-mini vê o card
+    do imóvel como humano vê).
+
+    Custo: 1 chamada Playwright (mesma do stealth normal) + ~5760 tokens de
+    input no LLM por imagem (viewport 1920x1080 com detail=high).
+    """
+    import base64 as _b64
+    screenshot_holder: dict = {"data": None}
+
+    def _capture(page):
+        try:
+            png_bytes = page.screenshot(full_page=False, type="png")
+            screenshot_holder["data"] = _b64.b64encode(png_bytes).decode("ascii")
+        except Exception as err:
+            log.debug(f"Screenshot falhou: {err}")
+
+    try:
+        record_browser_call()
+        log.debug(f"Fetch stealth + screenshot: {url}")
+        _stealth_semaphore.acquire()
+        try:
+            page = StealthyFetcher.fetch(
+                url,
+                headless=True,
+                network_idle=False,
+                timeout=30000,
+                wait=3000,
+                disable_resources=False,
+                page_action=_capture,
+            )
+        finally:
+            _stealth_semaphore.release()
+            gc.collect()
+        return page, screenshot_holder["data"]
+    except Exception as e:
+        log.warning(f"Fetch+screenshot falhou ({url}): {e}")
+        return None, None
 
 
 def fetch_page_with_scroll(url: str, max_scrolls: int = 50,
@@ -2071,13 +2115,25 @@ def scrape_property_page(
     """
     start = time.time()
 
+    # Vision: quando habilitado, força stealth + captura screenshot para passar ao LLM.
+    # Custo: 1 chamada Playwright (já paga no stealth normal) + ~5k tokens de imagem
+    # por chamada LLM. Acurácia em campos visuais (preço, m², banheiros) sobe MUITO.
+    vision_enabled = os.environ.get("CRAWL_VISION_ENABLED", "0") == "1"
+
     # Cache de stealth por domínio: se o domínio sempre precisou de stealth, pular HTTP
     from urllib.parse import urlparse as _urlparse
     _hostname = _urlparse(url).hostname or ""
     with _domain_stealth_lock:
         _forced_stealth = _domain_stealth.get(_hostname)  # True/False/None
 
-    if _forced_stealth is True:
+    screenshot_b64: Optional[str] = None
+
+    if vision_enabled:
+        # Sempre stealth quando vision está ligado — precisamos do screenshot
+        page, screenshot_b64 = fetch_stealth_with_screenshot(url)
+        source = "stealth+vision"
+        needed_stealth = True
+    elif _forced_stealth is True:
         # Domínio confirmado como SPA/JS — pular HTTP diretamente
         page = fetch_page(url, stealth=True)
         source = "stealth"
@@ -2121,7 +2177,10 @@ def scrape_property_page(
         return None
 
     # Extrair dados via pipeline cascata (com template se disponível)
-    result = extract_property_data(html, url, fallback_cidade, fallback_estado, template=template)
+    result = extract_property_data(
+        html, url, fallback_cidade, fallback_estado,
+        template=template, screenshot_b64=screenshot_b64,
+    )
 
     # Quality-based stealth fallback: HTTP retornou HTML mas dados muito incompletos
     # (sem preço e sem JSON-LD → provavelmente SPA que precisa de JS)
