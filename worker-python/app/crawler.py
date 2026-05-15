@@ -43,58 +43,88 @@ from app.benchmark_metrics import record_browser_call, record_http_call, record_
 # IMPORTANTE: definição aqui, mas a CHAMADA é feita depois que `log` é
 # definido (caso contrário NameError no startup).
 def _install_playwright_patches() -> None:
-    try:
-        from playwright.sync_api import Page as _SyncPage
-        from playwright.sync_api import TimeoutError as _SyncTimeout
-    except Exception as e:
-        log.warning(f"Não foi possível patchar Playwright sync: {e}")
-        return
+    """
+    Patcha Page.goto e Page.wait_for_load_state em TODAS as bibliotecas Playwright
+    usadas pelo Scrapling:
+      - playwright           → usado por Fetcher / DynamicFetcher
+      - patchright           → usado por StealthyFetcher (fork stealth)
+    """
+    patched_count = 0
 
-    _orig_sync_goto = _SyncPage.goto
-    _orig_sync_wait_load = _SyncPage.wait_for_load_state
+    def _patch_module(mod_name: str) -> bool:
+        try:
+            sync_mod = __import__(f"{mod_name}.sync_api", fromlist=["Page", "TimeoutError"])
+            _SyncPage = sync_mod.Page
+            _SyncTimeout = sync_mod.TimeoutError
+        except Exception as e:
+            log.warning(f"Não foi possível importar {mod_name}.sync_api: {e}")
+            return False
 
-    def _patched_sync_goto(self, url, **kwargs):
-        kwargs.setdefault("wait_until", "domcontentloaded")
-        return _orig_sync_goto(self, url, **kwargs)
+        # Idempotência: se já patchamos, pular
+        if getattr(_SyncPage.goto, "__sbi_patched__", False):
+            return True
 
-    def _patched_sync_wait_load(self, state="load", timeout=None):
-        # Para state="load" tolera timeout: muitas vezes load nunca dispara em SPAs
-        if state == "load":
-            try:
-                return _orig_sync_wait_load(self, state=state, timeout=timeout or 8000)
-            except _SyncTimeout:
-                return None
-        return _orig_sync_wait_load(self, state=state, timeout=timeout)
+        _orig_sync_goto = _SyncPage.goto
+        _orig_sync_wait_load = _SyncPage.wait_for_load_state
 
-    _SyncPage.goto = _patched_sync_goto
-    _SyncPage.wait_for_load_state = _patched_sync_wait_load
-
-    # Versão async (Scrapling tem caminhos async também)
-    try:
-        from playwright.async_api import Page as _AsyncPage
-        from playwright.async_api import TimeoutError as _AsyncTimeout
-
-        _orig_async_goto = _AsyncPage.goto
-        _orig_async_wait_load = _AsyncPage.wait_for_load_state
-
-        async def _patched_async_goto(self, url, **kwargs):
+        def _patched_sync_goto(self, url, **kwargs):
             kwargs.setdefault("wait_until", "domcontentloaded")
-            return await _orig_async_goto(self, url, **kwargs)
+            return _orig_sync_goto(self, url, **kwargs)
 
-        async def _patched_async_wait_load(self, state="load", timeout=None):
+        def _patched_sync_wait_load(self, state="load", timeout=None):
+            # Para state="load" tolera timeout: em SPAs o evento nunca dispara
             if state == "load":
                 try:
-                    return await _orig_async_wait_load(self, state=state, timeout=timeout or 8000)
-                except _AsyncTimeout:
+                    return _orig_sync_wait_load(self, state=state, timeout=timeout or 8000)
+                except _SyncTimeout:
                     return None
-            return await _orig_async_wait_load(self, state=state, timeout=timeout)
+            return _orig_sync_wait_load(self, state=state, timeout=timeout)
 
-        _AsyncPage.goto = _patched_async_goto
-        _AsyncPage.wait_for_load_state = _patched_async_wait_load
-    except Exception:
-        pass
+        _patched_sync_goto.__sbi_patched__ = True
+        _patched_sync_wait_load.__sbi_patched__ = True
 
-    log.info("Playwright patched: goto wait_until=domcontentloaded, wait_for_load_state('load') tolerante")
+        _SyncPage.goto = _patched_sync_goto
+        _SyncPage.wait_for_load_state = _patched_sync_wait_load
+
+        # Versão async
+        try:
+            async_mod = __import__(f"{mod_name}.async_api", fromlist=["Page", "TimeoutError"])
+            _AsyncPage = async_mod.Page
+            _AsyncTimeout = async_mod.TimeoutError
+
+            _orig_async_goto = _AsyncPage.goto
+            _orig_async_wait_load = _AsyncPage.wait_for_load_state
+
+            async def _patched_async_goto(self, url, **kwargs):
+                kwargs.setdefault("wait_until", "domcontentloaded")
+                return await _orig_async_goto(self, url, **kwargs)
+
+            async def _patched_async_wait_load(self, state="load", timeout=None):
+                if state == "load":
+                    try:
+                        return await _orig_async_wait_load(self, state=state, timeout=timeout or 8000)
+                    except _AsyncTimeout:
+                        return None
+                return await _orig_async_wait_load(self, state=state, timeout=timeout)
+
+            _patched_async_goto.__sbi_patched__ = True
+            _patched_async_wait_load.__sbi_patched__ = True
+
+            _AsyncPage.goto = _patched_async_goto
+            _AsyncPage.wait_for_load_state = _patched_async_wait_load
+        except Exception:
+            pass
+
+        return True
+
+    for mod in ("playwright", "patchright"):
+        if _patch_module(mod):
+            patched_count += 1
+
+    log.info(
+        f"Playwright patched ({patched_count}/2 libs): goto wait_until=domcontentloaded, "
+        f"wait_for_load_state('load') tolerante"
+    )
 
 
 # Catch unhandled thread exceptions
