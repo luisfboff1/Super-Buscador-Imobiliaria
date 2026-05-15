@@ -40,6 +40,8 @@ from app.benchmark_metrics import record_browser_call, record_http_call, record_
 # podem estar rodando, mas o conteúdo HTML já está lá — suficiente pra scrape).
 # Também tornar wait_for_load_state(state="load") tolerante a timeout (não
 # levantar exceção, só seguir adiante).
+# IMPORTANTE: definição aqui, mas a CHAMADA é feita depois que `log` é
+# definido (caso contrário NameError no startup).
 def _install_playwright_patches() -> None:
     try:
         from playwright.sync_api import Page as _SyncPage
@@ -95,9 +97,6 @@ def _install_playwright_patches() -> None:
     log.info("Playwright patched: goto wait_until=domcontentloaded, wait_for_load_state('load') tolerante")
 
 
-_install_playwright_patches()
-
-
 # Catch unhandled thread exceptions
 def _thread_excepthook(args):
     log.error(f"THREAD CRASH ({args.thread}): {args.exc_type.__name__}: {args.exc_value}")
@@ -110,6 +109,9 @@ from app.extractor import extract_property_data, extract_images, SiteTemplate
 from app.logger import get_logger
 
 log = get_logger("crawler")
+
+# Aplica os patches do Playwright agora que `log` está disponível
+_install_playwright_patches()
 
 # ─── Configuração ─────────────────────────────────────────────────────────────
 
