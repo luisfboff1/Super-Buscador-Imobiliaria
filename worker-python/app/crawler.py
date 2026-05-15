@@ -155,6 +155,73 @@ PAGINATION_STEALTH_BATCH_SIZE = int(os.environ.get("CRAWL_PAGINATION_STEALTH_BAT
 MAX_STEALTH_CONCURRENT = int(os.environ.get("MAX_STEALTH_CONCURRENT", "2"))
 _stealth_semaphore = threading.Semaphore(MAX_STEALTH_CONCURRENT)
 
+# ─── Circuit breaker por domínio (anti rate-limit) ───────────────────────────
+# Quando vários fetches em sequência falham com TCP timeout / connection refused
+# (sinais clássicos de rate-limit / IP banido temporariamente), entra em modo
+# "cooldown" pra esse domínio: fetches subsequentes retornam None imediatamente
+# sem bater no servidor. Evita gastar 15s × 3 retries × N URLs em loop.
+DOMAIN_FAIL_THRESHOLD = int(os.environ.get("CRAWL_DOMAIN_FAIL_THRESHOLD", "8"))
+DOMAIN_COOLDOWN_SECONDS = int(os.environ.get("CRAWL_DOMAIN_COOLDOWN_S", "300"))  # 5min
+_domain_failures: dict[str, int] = {}
+_domain_cooldown_until: dict[str, float] = {}
+_domain_breaker_lock = threading.Lock()
+
+
+def _domain_of(url: str) -> str:
+    try:
+        return urlparse(url).hostname or ""
+    except Exception:
+        return ""
+
+
+def _is_domain_in_cooldown(url: str) -> bool:
+    host = _domain_of(url)
+    if not host:
+        return False
+    with _domain_breaker_lock:
+        until = _domain_cooldown_until.get(host, 0.0)
+    return time.time() < until
+
+
+def _is_network_failure(err: BaseException) -> bool:
+    """Detecta erros de rede típicos de rate-limit / IP banido."""
+    msg = str(err).lower()
+    return any(s in msg for s in (
+        "timed out", "timeout", "connection refused", "connection reset",
+        "could not resolve", "name or service not known", "no route to host",
+    ))
+
+
+def _record_domain_failure(url: str, err: Optional[BaseException] = None) -> bool:
+    """Incrementa contador de falhas. Retorna True se acabou de entrar em cooldown."""
+    host = _domain_of(url)
+    if not host:
+        return False
+    if err is not None and not _is_network_failure(err):
+        # Falha de outra natureza (parse, 404 etc.) não conta pro circuit breaker
+        return False
+    with _domain_breaker_lock:
+        _domain_failures[host] = _domain_failures.get(host, 0) + 1
+        if _domain_failures[host] >= DOMAIN_FAIL_THRESHOLD:
+            already_hot = time.time() < _domain_cooldown_until.get(host, 0.0)
+            _domain_cooldown_until[host] = time.time() + DOMAIN_COOLDOWN_SECONDS
+            if not already_hot:
+                log.warning(
+                    f"🚫 Circuit breaker: domínio '{host}' marcado HOT por "
+                    f"{DOMAIN_COOLDOWN_SECONDS}s ({_domain_failures[host]} falhas TCP em sequência)"
+                )
+                return True
+    return False
+
+
+def _record_domain_success(url: str) -> None:
+    host = _domain_of(url)
+    if not host:
+        return
+    with _domain_breaker_lock:
+        if _domain_failures.get(host, 0) > 0:
+            _domain_failures[host] = 0
+
 # ── Patch Scrapling: trocar default do goto de "load" → "domcontentloaded" ──
 # Scrapling chama page.goto(url, referer=...) sem wait_until, então o Playwright
 # usa o default ("load"). Em SPAs com analytics/trackers (destak.imb.br, etc.)
@@ -338,7 +405,15 @@ def fetch_page(url: str, stealth: bool = False) -> Optional[object]:
     analytics/trackers (economia de ~25s em sites pesados como Bassanesi)
     mas ainda dando tempo para SPAs renderizarem (Antonella, etc).
     Benchmarks: Bassanesi 33s→6.5s, Antonella 5.4s→6.5s (mesmos links).
+
+    Circuit breaker: se o domínio está em cooldown por falhas TCP recentes,
+    retorna None imediatamente sem chamar a rede.
     """
+    # Curto-circuito: domínio em cooldown → não desperdiçar 15-30s × 3 retries
+    if _is_domain_in_cooldown(url):
+        log.debug(f"Fetch SKIP (domínio em cooldown): {url}")
+        return None
+
     try:
         if stealth:
             record_browser_call()
@@ -364,9 +439,11 @@ def fetch_page(url: str, stealth: bool = False) -> Optional[object]:
                 stealthy_headers=True,
                 timeout=15,
             )
+        _record_domain_success(url)
         return page
     except Exception as e:
         log.warning(f"Fetch falhou ({url}): {e}")
+        _record_domain_failure(url, e)
         return None
 
 
@@ -387,6 +464,11 @@ def fetch_stealth_with_screenshot(url: str) -> tuple[Optional[object], Optional[
     """
     import base64 as _b64
     import time as _time
+
+    # Curto-circuito: domínio em cooldown → não tenta
+    if _is_domain_in_cooldown(url):
+        log.debug(f"Fetch+screenshot SKIP (domínio em cooldown): {url}")
+        return None, None
 
     screenshot_holder: dict = {"data": None}
     _MAX_ATTEMPTS = 3
@@ -428,6 +510,7 @@ def fetch_stealth_with_screenshot(url: str) -> tuple[Optional[object], Optional[
                 _stealth_semaphore.release()
                 gc.collect()
 
+            _record_domain_success(url)
             return page, screenshot_holder["data"]
 
         except Exception as e:
@@ -443,6 +526,8 @@ def fetch_stealth_with_screenshot(url: str) -> tuple[Optional[object], Optional[
             break
 
     log.warning(f"Fetch+screenshot falhou ({url}): {last_err}")
+    if last_err is not None:
+        _record_domain_failure(url, last_err)
     return None, None
 
 
@@ -2734,6 +2819,18 @@ def execute_crawl(
         batch_urls = urls_to_enrich[batch_start : batch_start + SAVE_EVERY]
         batch_num = batch_start // SAVE_EVERY + 1
         total_batches = (total + SAVE_EVERY - 1) // SAVE_EVERY
+
+        # Se o domínio principal está em cooldown, abortar enriquecimento.
+        # As URLs restantes vão dar None em fetch_page (short-circuit) e
+        # gastar tempo de thread sem ganho. Melhor encerrar a fonte aqui.
+        if batch_urls and _is_domain_in_cooldown(batch_urls[0]):
+            host = _domain_of(batch_urls[0])
+            progress(
+                f"  ⛔ Domínio '{host}' em cooldown — abortando enriquecimento "
+                f"({len(urls_to_enrich) - batch_start} URLs não processadas). "
+                f"Tente novamente em alguns minutos."
+            )
+            break
 
         # Memory-pressure backoff: reduz workers se RAM alta
         under_pressure = _mem_pressure_relief(progress)
