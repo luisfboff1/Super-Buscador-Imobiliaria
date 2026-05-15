@@ -148,8 +148,16 @@ _install_playwright_patches()
 MAX_PAGES = int(os.environ.get("CRAWL_MAX_PAGES", "200"))
 MAX_ENRICH = int(os.environ.get("CRAWL_MAX_ENRICH", "0"))  # 0 = todos (sem limite)
 CONCURRENCY = int(os.environ.get("CRAWL_CONCURRENCY", "3"))  # paralelo (reduzido de 5→3 para evitar crash de Chromium por OOM)
-PAGINATION_HTTP_BATCH_SIZE = int(os.environ.get("CRAWL_PAGINATION_HTTP_BATCH_SIZE", "5"))
+# Default 3 (era 5): batch menor reduz chance do servidor disparar rate-limit.
+# Custo: paginação ~67% mais lenta (30s → 50s num site de 85 págs).
+# Override: CRAWL_PAGINATION_HTTP_BATCH_SIZE=5 pra voltar ao agressivo.
+PAGINATION_HTTP_BATCH_SIZE = int(os.environ.get("CRAWL_PAGINATION_HTTP_BATCH_SIZE", "3"))
 PAGINATION_STEALTH_BATCH_SIZE = int(os.environ.get("CRAWL_PAGINATION_STEALTH_BATCH_SIZE", "1"))
+
+# Sleep+jitter entre batches de paginação para parecer mais humano e evitar
+# rate-limit. Valores em segundos (float). Range [LOW, HIGH] sorteado por batch.
+PAGINATION_BATCH_DELAY_LOW = float(os.environ.get("CRAWL_PAGINATION_DELAY_LOW", "0.5"))
+PAGINATION_BATCH_DELAY_HIGH = float(os.environ.get("CRAWL_PAGINATION_DELAY_HIGH", "1.5"))
 
 # Semáforo global: limita instâncias Playwright simultâneas (cada uma ~200MB RAM)
 MAX_STEALTH_CONCURRENT = int(os.environ.get("MAX_STEALTH_CONCURRENT", "2"))
@@ -221,6 +229,78 @@ def _record_domain_success(url: str) -> None:
     with _domain_breaker_lock:
         if _domain_failures.get(host, 0) > 0:
             _domain_failures[host] = 0
+
+
+def _set_domain_cooldown(url: str, seconds: float, reason: str = "") -> None:
+    """Marca domínio em cooldown explícito (ex: HTTP 429 com Retry-After)."""
+    host = _domain_of(url)
+    if not host or seconds <= 0:
+        return
+    seconds = min(seconds, 3600)  # cap em 1h pra não travar pra sempre
+    with _domain_breaker_lock:
+        already_hot = time.time() < _domain_cooldown_until.get(host, 0.0)
+        _domain_cooldown_until[host] = max(
+            _domain_cooldown_until.get(host, 0.0),
+            time.time() + seconds,
+        )
+    if not already_hot:
+        tag = f" ({reason})" if reason else ""
+        log.warning(f"🚫 Cooldown explícito: '{host}' por {seconds:.0f}s{tag}")
+
+
+def _parse_retry_after(value: str) -> Optional[float]:
+    """Parse Retry-After header: pode ser segundos (int) ou HTTP-date."""
+    if not value:
+        return None
+    v = str(value).strip()
+    if v.isdigit():
+        return float(v)
+    try:
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(v)
+        delta = (dt.timestamp() - time.time())
+        return max(0.0, delta) if delta else None
+    except Exception:
+        return None
+
+
+def _check_rate_limit_response(url: str, page: object) -> bool:
+    """
+    Inspeciona a resposta HTTP. Se status indicar rate-limit (429/503),
+    aciona cooldown do domínio respeitando Retry-After. Retorna True se
+    foi rate-limited (caller deve descartar a resposta).
+    """
+    try:
+        status = getattr(page, "status", None) or getattr(page, "status_code", None)
+        if status not in (429, 503):
+            return False
+        headers = getattr(page, "headers", None) or {}
+        # headers pode ser dict ou Headers obj
+        retry_after_raw = None
+        try:
+            retry_after_raw = headers.get("Retry-After") or headers.get("retry-after")
+        except Exception:
+            try:
+                retry_after_raw = headers["Retry-After"]
+            except Exception:
+                pass
+        cooldown = _parse_retry_after(retry_after_raw) if retry_after_raw else None
+        if cooldown is None:
+            cooldown = 60.0  # default razoável quando servidor não diz quanto
+        _set_domain_cooldown(url, cooldown, reason=f"HTTP {status}")
+        return True
+    except Exception:
+        return False
+
+
+def _pagination_throttle() -> None:
+    """Sleep com jitter entre batches de paginação (anti rate-limit)."""
+    if PAGINATION_BATCH_DELAY_HIGH <= 0:
+        return
+    import random as _random
+    low = max(0.0, PAGINATION_BATCH_DELAY_LOW)
+    high = max(low, PAGINATION_BATCH_DELAY_HIGH)
+    time.sleep(_random.uniform(low, high))
 
 # ── Patch Scrapling: trocar default do goto de "load" → "domcontentloaded" ──
 # Scrapling chama page.goto(url, referer=...) sem wait_until, então o Playwright
@@ -439,6 +519,10 @@ def fetch_page(url: str, stealth: bool = False) -> Optional[object]:
                 stealthy_headers=True,
                 timeout=15,
             )
+        # Detecta rate-limit explícito do servidor (HTTP 429/503 + Retry-After).
+        # Descarta a resposta e dispara cooldown — circuit breaker absorve daí.
+        if page is not None and _check_rate_limit_response(url, page):
+            return None
         _record_domain_success(url)
         return page
     except Exception as e:
@@ -1769,6 +1853,9 @@ def discover_property_urls(
                         continue
                     break
                 page_num = max(batch_nums) + _offset_step
+                # Politeness: sleep com jitter entre batches para não acionar
+                # rate-limit do servidor. Custo: ~1s por batch.
+                _pagination_throttle()
                 continue
 
             # ── Sequential fetching (template não confirmado ou SPA) ──
