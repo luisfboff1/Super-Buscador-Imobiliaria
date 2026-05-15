@@ -1611,8 +1611,13 @@ def discover_property_urls(
                 batch_urls = [(pn, template.replace("{N}", str(pn))) for pn in batch_nums]
                 use_stealth_batch = stealth_required
 
-                # Fetch em paralelo com ThreadPoolExecutor
+                # Fetch em paralelo com ThreadPoolExecutor.
+                # Diferencia 3 cenários por página:
+                #   - fetch OK + links novos     → conteúdo válido
+                #   - fetch OK + 0 links novos   → fim natural (duplicados ou SPA sem JS)
+                #   - fetch FALHOU (None)        → timeout/rate-limit (NÃO confundir com vazio)
                 batch_results: dict[int, list[str]] = {}
+                batch_fetch_failures = 0
                 with ThreadPoolExecutor(max_workers=batch_size) as pool:
                     futures = {
                         pool.submit(fetch_page, url, use_stealth_batch): pn
@@ -1628,6 +1633,7 @@ def discover_property_urls(
                             batch_results[pn] = extract_detail_links(pg_obj, base_hostname)
                         else:
                             batch_results[pn] = []
+                            batch_fetch_failures += 1
 
                 # Processar resultados em ordem
                 hit_empty_end = False
@@ -1648,14 +1654,28 @@ def discover_property_urls(
                             all_detail_urls.add(l)
 
                 last_pn = sorted(batch_results.keys())[-1] if batch_results else batch_nums[-1]
+                fail_tag = f" ({batch_fetch_failures} falhas)" if batch_fetch_failures else ""
                 progress(f"    Págs {batch_nums[0]}-{last_pn}: "
-                         f"batch {'stealth' if use_stealth_batch else 'HTTP'} ×{batch_size}, "
+                         f"batch {'stealth' if use_stealth_batch else 'HTTP'} ×{batch_size}{fail_tag}, "
                          f"total: {len(all_detail_urls)}")
 
+                # ── Detecção de rate-limit / fim de pagina ───────────────────
+                # Se TODO o batch falhou em fetch (timeout/connection refused),
+                # o site parou de responder. NÃO tentar SPA fallback — vai
+                # falhar igual (TCP cortado ou rate-limit) e gastar 90s/página.
+                if batch_fetch_failures == len(batch_nums):
+                    progress(
+                        f"    ⛔ Páginas {batch_nums[0]}+ não respondem "
+                        f"({batch_fetch_failures}/{len(batch_nums)} fetches falharam) — "
+                        f"provável rate-limit ou fim da paginação. Parando."
+                    )
+                    break
+
                 if hit_empty_end:
-                    # SPA detection: HTTP retornou 0 novos (links duplicados ou
-                    # 0 links porque JS não renderizou). Retentar com Playwright.
-                    if not use_stealth_batch:
+                    # SPA detection: HTTP retornou 0 LINKS NOVOS (mas fetch funcionou).
+                    # Páginas duplicadas ou JS não renderizado. Retentar com Playwright
+                    # SOMENTE se as fetches em si não falharam (senão é rate-limit).
+                    if not use_stealth_batch and batch_fetch_failures < len(batch_nums):
                         stealth_required = True
                         empty_pages = 0
                         page_num = batch_nums[0]
