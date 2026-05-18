@@ -1,6 +1,6 @@
 # Super Buscador Imobiliário — Plano de Desenvolvimento
 
-> SaaS multi-tenant de busca imobiliária agregada: uma plataforma única para vasculhar centenas de imobiliárias ao mesmo tempo.
+> SaaS multi-tenant de busca imobiliária agregada: uma plataforma única para vasculhar centenas de imobiliárias ao mesmo tempo. forçando redeploy
 
 ---
 
