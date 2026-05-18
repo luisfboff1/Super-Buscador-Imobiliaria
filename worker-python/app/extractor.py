@@ -35,8 +35,8 @@ _openai_client: Optional[OpenAI] = None
 # Override via env: CRAWL_LLM_MODEL=gpt-5.4 para casos difíceis.
 LLM_MODEL = os.environ.get("CRAWL_LLM_MODEL", "gpt-5.4-mini")
 LLM_REASONING = os.environ.get(
-    "CRAWL_LLM_REASONING", "minimal"
-)  # minimal|low|medium|high
+    "CRAWL_LLM_REASONING", "low"
+)  # none|low|medium|high|xhigh
 
 
 def _get_openai() -> OpenAI:
@@ -137,7 +137,7 @@ class LocLLM(BaseModel):
 def _llm_chat(
     messages: list[dict],
     max_tokens: Optional[int] = 600,
-    reasoning_effort: str = "minimal",
+    reasoning_effort: str = "low",
 ) -> Optional[str]:
     """
     Chama OpenAI gpt-5-nano com reasoning minimal.
