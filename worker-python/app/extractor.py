@@ -1215,7 +1215,7 @@ class SiteTemplate:
         # Contagem de vezes que um seletor foi removido por retornar lixo.
         # Se > _MAX_SELECTOR_RESETS, para de tentar CSS para esse campo.
         self._selector_resets: dict[str, int] = {}
-        _MAX_SELECTOR_RESETS = 3
+        self._MAX_SELECTOR_RESETS = 3
 
     @property
     def learning(self) -> bool:
