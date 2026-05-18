@@ -6,3 +6,10 @@ __pycache__/
 venv/
 dist/
 *.egg-info/
+
+# Runtime logs
+*.log
+*.log.*
+crawl_report.json
+orchestrator_log.txt
+full_run_log.txt

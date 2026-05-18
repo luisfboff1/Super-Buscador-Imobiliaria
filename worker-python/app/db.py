@@ -49,7 +49,7 @@ def _is_alive(conn: PgConnection) -> bool:
 
 def get_conn() -> PgConnection:
     """Retorna conexão reutilizável ao Postgres (Neon).
-    
+
     Reconecta automaticamente se a conexão SSL foi fechada pelo servidor
     (comum com Neon após idle timeout).
     """
@@ -181,6 +181,7 @@ def ensure_benchmark_tables() -> None:
 
 # ─── Types ────────────────────────────────────────────────────────────────────
 
+
 class Fonte:
     def __init__(self, row: dict):
         self.id: str = row["id"]
@@ -197,6 +198,7 @@ class Fonte:
 
 class ImovelInput:
     """Dados de um imóvel para upsert."""
+
     def __init__(
         self,
         url_anuncio: str,
@@ -235,13 +237,20 @@ class ImovelInput:
     def fields_count(self) -> int:
         """Quantos campos preenchidos (excluindo url_anuncio)."""
         count = 0
-        if self.titulo: count += 1
-        if self.tipo: count += 1
-        if self.preco and self.preco > 0: count += 1
-        if self.area_m2 and self.area_m2 > 0: count += 1
-        if self.quartos and self.quartos > 0: count += 1
-        if self.bairro: count += 1
-        if self.cidade: count += 1
+        if self.titulo:
+            count += 1
+        if self.tipo:
+            count += 1
+        if self.preco and self.preco > 0:
+            count += 1
+        if self.area_m2 and self.area_m2 > 0:
+            count += 1
+        if self.quartos and self.quartos > 0:
+            count += 1
+        if self.bairro:
+            count += 1
+        if self.cidade:
+            count += 1
         return count
 
     def __repr__(self):
@@ -249,6 +258,7 @@ class ImovelInput:
 
 
 # ─── Queries ──────────────────────────────────────────────────────────────────
+
 
 def get_fonte_by_id(fonte_id: str) -> Optional[Fonte]:
     """Busca fonte pelo ID."""
@@ -353,15 +363,22 @@ def reset_stuck_crawling_fontes() -> int:
     Reseta fontes presas em status='crawling' (worker foi reiniciado).
     Chamado no startup para evitar o frontend ficar preso em polling infinito.
     """
-    stuck_progress = json.dumps({
-        "fase": "erro",
-        "message": "Worker reiniciado — crawl interrompido. Clique em Sincronizar para reiniciar.",
-        "done": 0, "total": 0, "pct": 0,
-        "enriched": 0, "failed": 0,
-        "elapsed": "0s", "logs": [],
-        "finished": True,
-        "heartbeatAt": datetime.utcnow().isoformat(),
-    }, ensure_ascii=False)
+    stuck_progress = json.dumps(
+        {
+            "fase": "erro",
+            "message": "Worker reiniciado — crawl interrompido. Clique em Sincronizar para reiniciar.",
+            "done": 0,
+            "total": 0,
+            "pct": 0,
+            "enriched": 0,
+            "failed": 0,
+            "elapsed": "0s",
+            "logs": [],
+            "finished": True,
+            "heartbeatAt": datetime.utcnow().isoformat(),
+        },
+        ensure_ascii=False,
+    )
     with cursor() as cur:
         cur.execute(
             "UPDATE fontes SET status = 'erro', crawl_erro = %s, crawl_progress = %s::jsonb "
@@ -370,7 +387,9 @@ def reset_stuck_crawling_fontes() -> int:
         )
         count = cur.rowcount
     if count > 0:
-        log.warning(f"⚠ {count} fonte(s) resetada(s): estavam em 'crawling' ao reiniciar")
+        log.warning(
+            f"⚠ {count} fonte(s) resetada(s): estavam em 'crawling' ao reiniciar"
+        )
     return count
 
 
@@ -384,10 +403,14 @@ def update_crawl_progress(fonte_id: str, progress_data: dict) -> None:
 
 
 def get_existing_imovel_urls(fonte_id: str) -> set[str]:
-    """Retorna conjunto de URLs de imóveis já existentes no banco para uma fonte."""
+    """Retorna URLs de imóveis já enriquecidos com sucesso (titulo não-nulo).
+
+    URLs com titulo=null são excluídas para que a extração seja re-tentada
+    no próximo crawl incremental.
+    """
     with cursor() as cur:
         cur.execute(
-            "SELECT url_anuncio FROM imoveis WHERE fonte_id = %s",
+            "SELECT url_anuncio FROM imoveis WHERE fonte_id = %s AND titulo IS NOT NULL",
             (fonte_id,),
         )
         return {row["url_anuncio"] for row in cur.fetchall()}
@@ -491,13 +514,37 @@ def insert_crawl_run_items(run_id: str, items: list[dict]) -> int:
             item["url"],
             item.get("item_type", "detail"),
             bool(item.get("discovered", False)),
-            json.dumps(item.get("extracted_data"), ensure_ascii=False) if item.get("extracted_data") is not None else None,
-            json.dumps(item.get("field_sources"), ensure_ascii=False) if item.get("field_sources") is not None else None,
-            json.dumps(item.get("field_confidence"), ensure_ascii=False) if item.get("field_confidence") is not None else None,
+            (
+                json.dumps(item.get("extracted_data"), ensure_ascii=False)
+                if item.get("extracted_data") is not None
+                else None
+            ),
+            (
+                json.dumps(item.get("field_sources"), ensure_ascii=False)
+                if item.get("field_sources") is not None
+                else None
+            ),
+            (
+                json.dumps(item.get("field_confidence"), ensure_ascii=False)
+                if item.get("field_confidence") is not None
+                else None
+            ),
             item.get("validator_status"),
-            json.dumps(item.get("validator_reasons"), ensure_ascii=False) if item.get("validator_reasons") is not None else None,
-            json.dumps(item.get("images_meta"), ensure_ascii=False) if item.get("images_meta") is not None else None,
-            json.dumps(item.get("raw_metrics"), ensure_ascii=False) if item.get("raw_metrics") is not None else None,
+            (
+                json.dumps(item.get("validator_reasons"), ensure_ascii=False)
+                if item.get("validator_reasons") is not None
+                else None
+            ),
+            (
+                json.dumps(item.get("images_meta"), ensure_ascii=False)
+                if item.get("images_meta") is not None
+                else None
+            ),
+            (
+                json.dumps(item.get("raw_metrics"), ensure_ascii=False)
+                if item.get("raw_metrics") is not None
+                else None
+            ),
         )
         for item in items
     ]
@@ -613,7 +660,9 @@ def mark_imoveis_indisponiveis(fonte_id: str, urls_ativas: list[str]) -> int:
         all_rows = cur.fetchall()
 
     active_set = set(urls_ativas)
-    ids_to_disable = [row["id"] for row in all_rows if row["url_anuncio"] not in active_set]
+    ids_to_disable = [
+        row["id"] for row in all_rows if row["url_anuncio"] not in active_set
+    ]
 
     if ids_to_disable:
         with cursor() as cur:

@@ -33,7 +33,9 @@ _openai_client: Optional[OpenAI] = None
 # gpt-5.4-mini: $0.75/M in, $4.50/M out, suporta vision e reasoning.
 # Override via env: CRAWL_LLM_MODEL=gpt-5.4 para casos difíceis.
 LLM_MODEL = os.environ.get("CRAWL_LLM_MODEL", "gpt-5.4-mini")
-LLM_REASONING = os.environ.get("CRAWL_LLM_REASONING", "minimal")  # minimal|low|medium|high
+LLM_REASONING = os.environ.get(
+    "CRAWL_LLM_REASONING", "minimal"
+)  # minimal|low|medium|high
 
 
 def _get_openai() -> OpenAI:
@@ -51,16 +53,35 @@ def _get_openai() -> OpenAI:
 # conforme o schema. Elimina alucinações de formato e fields fora do tipo.
 
 _TIPO_VALUES = Literal[
-    "casa", "apartamento", "terreno", "comercial", "rural", "cobertura",
-    "kitnet", "sobrado", "flat", "loft", "galpao", "sala", "loja",
-    "chacara", "predio", "box", "barracao", "duplex", "triplex",
-    "condominio", "pavilhao", "outro",
+    "casa",
+    "apartamento",
+    "terreno",
+    "comercial",
+    "rural",
+    "cobertura",
+    "kitnet",
+    "sobrado",
+    "flat",
+    "loft",
+    "galpao",
+    "sala",
+    "loja",
+    "chacara",
+    "predio",
+    "box",
+    "barracao",
+    "duplex",
+    "triplex",
+    "condominio",
+    "pavilhao",
+    "outro",
 ]
 _TRANSACAO_VALUES = Literal["venda", "aluguel", "ambos"]
 
 
 class ImovelExtraidoLLM(BaseModel):
     """Schema strict para extração completa via LLM."""
+
     titulo: Optional[str] = Field(default=None)
     tipo: Optional[_TIPO_VALUES] = Field(default=None)
     transacao: Optional[_TRANSACAO_VALUES] = Field(default=None)
@@ -70,22 +91,29 @@ class ImovelExtraidoLLM(BaseModel):
         description="Nome do bairro/loteamento (max 60 chars). NUNCA o título inteiro ou nome da imobiliária.",
     )
     estado: Optional[str] = Field(default=None, description="Sigla UF de 2 letras")
-    preco: Optional[float] = Field(default=None, description="Preço de VENDA em reais (número puro, sem R$)")
+    preco: Optional[float] = Field(
+        default=None, description="Preço de VENDA em reais (número puro, sem R$)"
+    )
     area_m2: Optional[float] = Field(
         default=None,
         description="Área PRIVATIVA/ÚTIL do imóvel em m². NÃO usar área do empreendimento, condomínio nem terreno (a menos que o imóvel SEJA terreno).",
     )
-    quartos: Optional[int] = Field(default=None, description="Total de quartos/dormitórios (incluindo suítes)")
+    quartos: Optional[int] = Field(
+        default=None, description="Total de quartos/dormitórios (incluindo suítes)"
+    )
     banheiros: Optional[int] = Field(
         default=None,
         description="Banheiros DO imóvel (social/suíte/lavabo). NÃO contar banheiros do condomínio.",
     )
     vagas: Optional[int] = Field(default=None, description="Vagas de garagem do imóvel")
-    descricao: Optional[str] = Field(default=None, description="Resumo da descrição (max 500 chars)")
+    descricao: Optional[str] = Field(
+        default=None, description="Resumo da descrição (max 500 chars)"
+    )
 
 
 class ImovelHealedLLM(BaseModel):
     """Schema enxuto para healing — só campos que precisam ser preenchidos."""
+
     preco: Optional[float] = None
     area_m2: Optional[float] = None
     quartos: Optional[int] = None
@@ -97,11 +125,13 @@ class ImovelHealedLLM(BaseModel):
 
 class LocLLM(BaseModel):
     """Schema mínimo para extrair bairro/cidade do título."""
+
     bairro: Optional[str] = None
     cidade: Optional[str] = None
 
 
 # ─── LLM universal: OpenAI gpt-5-nano ──────────────────────────────────────────
+
 
 def _llm_chat(
     messages: list[dict],
@@ -135,9 +165,13 @@ def _llm_chat(
         usage = response.usage
         tokens_in = usage.prompt_tokens if usage else 0
         tokens_out = usage.completion_tokens if usage else 0
-        log.info(f"[openai] finish={finish} tokens: {tokens_in}→{tokens_out} len={len(text)} time={_elapsed:.1f}s")
+        log.info(
+            f"[openai] finish={finish} tokens: {tokens_in}→{tokens_out} len={len(text)} time={_elapsed:.1f}s"
+        )
         if not text:
-            log.warning(f"[openai] Resposta vazia (finish={finish}, tokens_out={tokens_out})")
+            log.warning(
+                f"[openai] Resposta vazia (finish={finish}, tokens_out={tokens_out})"
+            )
         return text
     except Exception as err:
         _elapsed = _time.monotonic() - _t0
@@ -147,6 +181,7 @@ def _llm_chat(
 
 
 # ─── Structured outputs via Pydantic strict ──────────────────────────────────
+
 
 def _llm_chat_parsed(
     messages: list[dict],
@@ -167,6 +202,7 @@ def _llm_chat_parsed(
     detalhe está disponível.
     """
     import time as _time
+
     _t0 = _time.monotonic()
 
     # Injeta imagem se fornecida — converte content string em multimodal
@@ -221,6 +257,7 @@ def _llm_chat_parsed(
 
 
 # ─── Candidate-then-pick: pré-extrai todos os números, LLM escolhe ───────────
+
 
 def _collect_numeric_candidates(html: str) -> dict[str, list]:
     """
@@ -283,6 +320,7 @@ def _collect_numeric_candidates(html: str) -> dict[str, list]:
 
 # ─── 1. Extração de imagens via BeautifulSoup ────────────────────────────────
 
+
 def extract_images(html: str) -> list[str]:
     """
     Extrai URLs de imagens do HTML, com ranking:
@@ -302,7 +340,9 @@ def extract_images(html: str) -> list[str]:
         u = u.strip()
         if not u.startswith("http") or u in seen:
             return
-        if re.search(r"logo|icon|banner|avatar|sprite|footer|placeholder|blank\.", u, re.I):
+        if re.search(
+            r"logo|icon|banner|avatar|sprite|footer|placeholder|blank\.", u, re.I
+        ):
             return
         seen.add(u)
         ordered.append(u)
@@ -318,9 +358,9 @@ def extract_images(html: str) -> list[str]:
         _add(link.get("href", ""))
 
     # 2. Imagens dentro de figure/picture/galeria — provavelmente da galeria do imóvel
-    gallery_containers = soup.find_all(
-        ["figure", "picture"]
-    ) + soup.select("[class*='galer'], [class*='galler'], [class*='slider'], [class*='carousel'], [class*='swiper']")
+    gallery_containers = soup.find_all(["figure", "picture"]) + soup.select(
+        "[class*='galer'], [class*='galler'], [class*='slider'], [class*='carousel'], [class*='swiper']"
+    )
     for container in gallery_containers:
         for img in container.find_all("img"):
             src = (
@@ -345,6 +385,7 @@ def extract_images(html: str) -> list[str]:
 
 
 # ─── Micro-LLM: extrai bairro/cidade APENAS do título (pós-processamento do template) ────────
+
 
 def _llm_locate_from_titulo(titulo: str, url: str) -> Optional[ImovelInput]:
     """
@@ -379,17 +420,17 @@ def _llm_locate_from_titulo(titulo: str, url: str) -> Optional[ImovelInput]:
 # ─── Sanitização de localização (cidade/bairro) ──────────────────────────────
 
 _LOCATION_NOISE_RE = re.compile(
-    r"R\$[\s\d.,]"               # preço (R$ 1.234)
+    r"R\$[\s\d.,]"  # preço (R$ 1.234)
     r"|\bà venda\b|\bpara alugar\b|\bpara locação\b|\bpara comprar\b|\bimóv[eé]\b"  # frases de transação
-    r"|\bImobili[áa]ria\b"        # nome de empresa
-    r"|\bCOD\.?\s*\d+"           # código de referência (COD. 3698)
-    r"|\bno bairro\b",            # título SEO (fallback: extração abaixo)
+    r"|\bImobili[áa]ria\b"  # nome de empresa
+    r"|\bCOD\.?\s*\d+"  # código de referência (COD. 3698)
+    r"|\bno bairro\b",  # título SEO (fallback: extração abaixo)
     re.I,
 )
 
 
 # Padrão de título SEO BR: "...no bairro CENTRO em Caxias do Sul..."
-_BAIRRO_SEO_RE = re.compile(r'\bno\s+bairro\s+([^,\-\(]+?)\s+em\s', re.I)
+_BAIRRO_SEO_RE = re.compile(r"\bno\s+bairro\s+([^,\-\(]+?)\s+em\s", re.I)
 
 
 def _sanitize_location(val) -> Optional[str]:
@@ -427,6 +468,7 @@ def _sanitize_location(val) -> Optional[str]:
 
 # ─── 2. Extração via JSON-LD (grátis, sem LLM) ──────────────────────────────
 
+
 def extract_from_json_ld(html: str, url: str) -> Optional[ImovelInput]:
     """Extrai dados de JSON-LD (schema.org) embutido no HTML."""
     soup = BeautifulSoup(html, "lxml")
@@ -443,15 +485,34 @@ def extract_from_json_ld(html: str, url: str) -> Optional[ImovelInput]:
                 item_type = str(item.get("@type", "")).lower()
 
                 # Pular schemas de organização/website/breadcrumb
-                skip_types = ["organization", "localbusiness", "website", "webpage",
-                              "breadcrumb", "searchaction", "person", "imageobject",
-                              "agent", "broker", "service"]
+                skip_types = [
+                    "organization",
+                    "localbusiness",
+                    "website",
+                    "webpage",
+                    "breadcrumb",
+                    "searchaction",
+                    "person",
+                    "imageobject",
+                    "agent",
+                    "broker",
+                    "service",
+                ]
                 if any(t in item_type for t in skip_types):
                     continue
 
                 type_match = any(
                     t in item_type
-                    for t in ["realestate", "residence", "house", "apartment", "property", "product", "offer", "place"]
+                    for t in [
+                        "realestate",
+                        "residence",
+                        "house",
+                        "apartment",
+                        "property",
+                        "product",
+                        "offer",
+                        "place",
+                    ]
                 )
                 if not type_match:
                     continue
@@ -460,7 +521,9 @@ def extract_from_json_ld(html: str, url: str) -> Optional[ImovelInput]:
                 if isinstance(offers, list):
                     offers = offers[0] if offers else {}
 
-                preco_raw = offers.get("price") or item.get("price") or offers.get("lowPrice")
+                preco_raw = (
+                    offers.get("price") or item.get("price") or offers.get("lowPrice")
+                )
                 preco = float(preco_raw) if preco_raw else None
 
                 address = item.get("address", {})
@@ -472,18 +535,33 @@ def extract_from_json_ld(html: str, url: str) -> Optional[ImovelInput]:
                     titulo=item.get("name") or item.get("headline"),
                     descricao=(item.get("description") or "")[:500] or None,
                     cidade=_sanitize_location(address.get("addressLocality")),
-                    bairro=_sanitize_location(address.get("streetAddress") or address.get("addressRegion", "").split(",")[0].strip() or None),
-                    estado=(address.get("addressRegion", "") or "")[-2:].upper() if address.get("addressRegion") else None,
+                    bairro=_sanitize_location(
+                        address.get("streetAddress")
+                        or address.get("addressRegion", "").split(",")[0].strip()
+                        or None
+                    ),
+                    estado=(
+                        (address.get("addressRegion", "") or "")[-2:].upper()
+                        if address.get("addressRegion")
+                        else None
+                    ),
                     preco=preco,
                     area_m2=_parse_floor_size(item.get("floorSize")),
-                    quartos=_safe_int(item.get("numberOfRooms") or item.get("numberOfBedrooms")),
-                    banheiros=_safe_int(item.get("numberOfBathroomsTotal") or item.get("numberOfBathrooms")),
+                    quartos=_safe_int(
+                        item.get("numberOfRooms") or item.get("numberOfBedrooms")
+                    ),
+                    banheiros=_safe_int(
+                        item.get("numberOfBathroomsTotal")
+                        or item.get("numberOfBathrooms")
+                    ),
                     vagas=_safe_int(item.get("numberOfParkingSpaces")),
                 )
 
                 if result.titulo or result.preco:
                     preco_str = f"R${result.preco:,.0f}" if result.preco else "s/preço"
-                    log.info(f"✓ [json-ld] {result.titulo or 'sem título'} — {preco_str} — {result.bairro or '?'}")
+                    log.info(
+                        f"✓ [json-ld] {result.titulo or 'sem título'} — {preco_str} — {result.bairro or '?'}"
+                    )
                     return result
 
         except (json.JSONDecodeError, TypeError, ValueError):
@@ -516,6 +594,7 @@ def _safe_int(val) -> Optional[int]:
 
 
 # ─── 3. Extração rápida via regex (preço + área — universal) ──────────────────
+
 
 def extract_quick_regex(html: str, url: str) -> Optional[ImovelInput]:
     """
@@ -581,7 +660,9 @@ def extract_quick_regex(html: str, url: str) -> Optional[ImovelInput]:
     )
 
     preco_str = f"R${result.preco:,.0f}" if result.preco else "s/preço"
-    log.info(f"✓ [regex] {result.titulo or 'sem título'} — {preco_str} — {result.fields_count} campos")
+    log.info(
+        f"✓ [regex] {result.titulo or 'sem título'} — {preco_str} — {result.fields_count} campos"
+    )
     return result
 
 
@@ -589,8 +670,12 @@ def _detect_transacao(url: str, titulo: str, text: str) -> Optional[str]:
     """Detecta tipo de transação a partir da URL, título e texto."""
     # Prioridade 1: URL + título (mais confiável — sem ruído de menus de navegação)
     primary = f"{url.lower()} {titulo.lower()}"
-    has_venda_primary = bool(re.search(r"(comprar|venda|à venda|a venda|para vender)", primary))
-    has_aluguel_primary = bool(re.search(r"(alugar|aluguel|locação|para alugar|locacao)", primary))
+    has_venda_primary = bool(
+        re.search(r"(comprar|venda|à venda|a venda|para vender)", primary)
+    )
+    has_aluguel_primary = bool(
+        re.search(r"(alugar|aluguel|locação|para alugar|locacao)", primary)
+    )
 
     if has_venda_primary and not has_aluguel_primary:
         return "venda"
@@ -599,8 +684,12 @@ def _detect_transacao(url: str, titulo: str, text: str) -> Optional[str]:
 
     # Prioridade 2: corpo do texto (excluindo início que costuma ter menu de nav)
     body = text[200:700] if len(text) > 200 else text[:500]
-    has_venda = has_venda_primary or bool(re.search(r"(comprar|venda|à venda|a venda|para vender)", body))
-    has_aluguel = has_aluguel_primary or bool(re.search(r"(alugar|aluguel|locação|para alugar|locacao)", body))
+    has_venda = has_venda_primary or bool(
+        re.search(r"(comprar|venda|à venda|a venda|para vender)", body)
+    )
+    has_aluguel = has_aluguel_primary or bool(
+        re.search(r"(alugar|aluguel|locação|para alugar|locacao)", body)
+    )
 
     if has_venda and has_aluguel:
         return "ambos"
@@ -648,9 +737,14 @@ def _extract_area(text: str) -> Optional[float]:
         context = text[start:end]
 
         score = 0
-        if re.search(r"(área|area|privativa|útil|util|total|construída|construida|metr)", context):
+        if re.search(
+            r"(área|area|privativa|útil|util|total|construída|construida|metr)", context
+        ):
             score += 4
-        if re.search(r"(condomínio|condominio|empreendimento|lazer|salão|salao|academia)", context):
+        if re.search(
+            r"(condomínio|condominio|empreendimento|lazer|salão|salao|academia)",
+            context,
+        ):
             score -= 3
         if m.start() < 2500:
             score += 2
@@ -737,16 +831,21 @@ def _extract_vagas(text: str) -> Optional[int]:
 
 # ─── Site Template Learning ──────────────────────────────────────────────────
 
+
 def _build_css_selector(el) -> Optional[str]:
     """Constrói um CSS selector reproduzível para um elemento BS4."""
-    if not el or not hasattr(el, 'name') or el.name in ("[document]", None):
+    if not el or not hasattr(el, "name") or el.name in ("[document]", None):
         return None
 
     parts = []
     current = el
 
     for _ in range(3):  # max 3 níveis acima
-        if not current or not hasattr(current, 'name') or current.name in ("[document]", "html", "body", None):
+        if (
+            not current
+            or not hasattr(current, "name")
+            or current.name in ("[document]", "html", "body", None)
+        ):
             break
 
         tag = current.name
@@ -757,12 +856,15 @@ def _build_css_selector(el) -> Optional[str]:
 
         classes = current.get("class", [])
         stable = [
-            c for c in classes
-            if c and len(c) < 40
+            c
+            for c in classes
+            if c
+            and len(c) < 40
             and not re.match(
-                r'^(is-|has-|active|open|show|selected|hover|focus|'
-                r'ng-|v-|js-|wp-block|post-\d|entry-|page-|col-|row|'
-                r'animate|fade|slide|transition)', c
+                r"^(is-|has-|active|open|show|selected|hover|focus|"
+                r"ng-|v-|js-|wp-block|post-\d|entry-|page-|col-|row|"
+                r"animate|fade|slide|transition)",
+                c,
             )
         ]
 
@@ -828,7 +930,13 @@ def _find_selectors_for_value(soup, value, field: str) -> list[str]:
         try:
             for text_node in soup.find_all(string=re.compile(pattern, re.I)):
                 parent = text_node.parent
-                if parent and parent.name not in ("script", "style", "head", "[document]", None):
+                if parent and parent.name not in (
+                    "script",
+                    "style",
+                    "head",
+                    "[document]",
+                    None,
+                ):
                     sel = _build_css_selector(parent)
                     if sel and sel not in results:
                         results.append(sel)
@@ -838,7 +946,7 @@ def _find_selectors_for_value(soup, value, field: str) -> list[str]:
     return results[:5]
 
 
-def _llm_find_selectors(soup: BeautifulSoup, data: 'ImovelInput') -> dict[str, str]:
+def _llm_find_selectors(soup: BeautifulSoup, data: "ImovelInput") -> dict[str, str]:
     """
     Usa LLM para identificar CSS selectors SEMANTICAMENTE corretos para cada campo.
     Envia o HTML limpo + valores já extraídos → LLM aponta o elemento correto,
@@ -847,8 +955,15 @@ def _llm_find_selectors(soup: BeautifulSoup, data: 'ImovelInput') -> dict[str, s
     """
     # Campos que queremos selectors para o template
     _TEMPLATE_FIELDS = [
-        "preco", "titulo", "bairro", "cidade", "estado",
-        "quartos", "banheiros", "vagas", "area_m2",
+        "preco",
+        "titulo",
+        "bairro",
+        "cidade",
+        "estado",
+        "quartos",
+        "banheiros",
+        "vagas",
+        "area_m2",
     ]
     fields_with_values = {
         k: getattr(data, k)
@@ -875,7 +990,7 @@ def _llm_find_selectors(soup: BeautifulSoup, data: 'ImovelInput') -> dict[str, s
                 "CRÍTICO: 'vagas' é o número de vagas de garagem (tipicamente 0-5), "
                 "NUNCA confunda com area_m2 (que contém 'm²' ou 'm2'). "
                 "Se vagas e area_m2 estão no mesmo elemento, omita vagas. "
-                "Retorne APENAS JSON válido: {\"campo\": \"css_selector\", ...} "
+                'Retorne APENAS JSON válido: {"campo": "css_selector", ...} '
                 "Omita campos que não conseguir identificar com certeza."
             ),
         },
@@ -922,21 +1037,72 @@ def _llm_find_selectors(soup: BeautifulSoup, data: 'ImovelInput') -> dict[str, s
 
 # Valores de UI que o template NÃO deve aprender como bairro/cidade/etc.
 # Elementos de navegação (breadcrumb, menu, labels) comuns em sites imobiliários.
-_UI_BLACKLIST: frozenset = frozenset({
-    "início", "inicio", "home", "página inicial", "pagina inicial",
-    "bairro", "cidade", "estado", "localização", "localizacao", "endereço", "endereco",
-    "tipo", "transação", "transacao", "categoria", "subtipo",
-    "preço", "preco", "valor", "aluguel", "venda", "compra",
-    "quartos", "quarto", "dormitórios", "dormitorios",
-    "banheiros", "banheiro", "vagas", "vaga", "garagem",
-    "área", "area", "m²", "m2",
-    "descrição", "descricao", "detalhes", "características", "caracteristicas",
-    "imóvel", "imovel", "imóveis", "imoveis", "anúncio", "anuncio",
-    "ver mais", "saiba mais", "clique aqui", "ver anúncio",
-    "contato", "fale conosco", "whatsapp",
-    "anterior", "próximo", "proximo", "voltar",
-    "filtros", "filtrar", "buscar", "pesquisar",
-})
+_UI_BLACKLIST: frozenset = frozenset(
+    {
+        "início",
+        "inicio",
+        "home",
+        "página inicial",
+        "pagina inicial",
+        "bairro",
+        "cidade",
+        "estado",
+        "localização",
+        "localizacao",
+        "endereço",
+        "endereco",
+        "tipo",
+        "transação",
+        "transacao",
+        "categoria",
+        "subtipo",
+        "preço",
+        "preco",
+        "valor",
+        "aluguel",
+        "venda",
+        "compra",
+        "quartos",
+        "quarto",
+        "dormitórios",
+        "dormitorios",
+        "banheiros",
+        "banheiro",
+        "vagas",
+        "vaga",
+        "garagem",
+        "área",
+        "area",
+        "m²",
+        "m2",
+        "descrição",
+        "descricao",
+        "detalhes",
+        "características",
+        "caracteristicas",
+        "imóvel",
+        "imovel",
+        "imóveis",
+        "imoveis",
+        "anúncio",
+        "anuncio",
+        "ver mais",
+        "saiba mais",
+        "clique aqui",
+        "ver anúncio",
+        "contato",
+        "fale conosco",
+        "whatsapp",
+        "anterior",
+        "próximo",
+        "proximo",
+        "voltar",
+        "filtros",
+        "filtrar",
+        "buscar",
+        "pesquisar",
+    }
+)
 
 
 def _parse_template_field(field: str, raw_text: str):
@@ -1000,12 +1166,22 @@ class SiteTemplate:
 
     LEARN_PAGES = 5
     MIN_VOTES = 2
-    MIN_FIELDS = 3   # mínimo de campos confirmados
+    MIN_FIELDS = 3  # mínimo de campos confirmados
     DISABLE_MISS_RATE = 0.35  # desabilita se >35% falhas
 
     ALL_FIELDS = (
-        "titulo", "preco", "tipo", "bairro", "cidade", "estado",
-        "transacao", "quartos", "banheiros", "vagas", "area_m2", "descricao",
+        "titulo",
+        "preco",
+        "tipo",
+        "bairro",
+        "cidade",
+        "estado",
+        "transacao",
+        "quartos",
+        "banheiros",
+        "vagas",
+        "area_m2",
+        "descricao",
     )
 
     def __init__(self):
@@ -1018,7 +1194,7 @@ class SiteTemplate:
         # Amostras para validação positiva: (html, url, data) das páginas de aprendizado.
         # Usadas em _confirm() para testar se os seletores candidatos retornam
         # valores que batem com ground truth (URL slug, dados extraídos pela LLM).
-        self._learn_samples: list[tuple[str, str, 'ImovelInput']] = []
+        self._learn_samples: list[tuple[str, str, "ImovelInput"]] = []
         # Métricas
         self.hits = 0
         self.misses = 0
@@ -1035,7 +1211,7 @@ class SiteTemplate:
     # Peso do voto para selectors identificados pela LLM vs texto (mais confiável).
     _LLM_SELECTOR_WEIGHT = 3
 
-    def add_sample(self, html: str, data: 'ImovelInput'):
+    def add_sample(self, html: str, data: "ImovelInput"):
         """Aprende selectors de uma página com dados extraídos."""
         if self.is_ready:
             return
@@ -1052,7 +1228,9 @@ class SiteTemplate:
         for field, sel in llm_selectors.items():
             if field not in self._votes:
                 self._votes[field] = {}
-            self._votes[field][sel] = self._votes[field].get(sel, 0) + self._LLM_SELECTOR_WEIGHT
+            self._votes[field][sel] = (
+                self._votes[field].get(sel, 0) + self._LLM_SELECTOR_WEIGHT
+            )
             # Marcar como validado semanticamente pela LLM
             if field not in self._llm_voted:
                 self._llm_voted[field] = set()
@@ -1078,7 +1256,9 @@ class SiteTemplate:
         # Guardar amostra para validação positiva na confirmação
         self._learn_samples.append((html, data.url_anuncio or "", data))
         coverage = f"{len(llm_selectors)}/{len([f for f in self.ALL_FIELDS if getattr(data, f, None) is not None])} LLM"
-        log.debug(f"📘 Template amostra {self._sample_count}/{self.LEARN_PAGES} ({coverage})")
+        log.debug(
+            f"📘 Template amostra {self._sample_count}/{self.LEARN_PAGES} ({coverage})"
+        )
 
         if self._sample_count >= self.LEARN_PAGES:
             self._confirm()
@@ -1087,7 +1267,14 @@ class SiteTemplate:
 
     # Campos opcionais: não aparecem em todos os tipos de imóvel (terreno não tem
     # banheiros, sala não tem quartos), então MIN_VOTES=1 é suficiente para eles.
-    OPTIONAL_FIELDS = {"banheiros", "vagas", "area_m2", "quartos", "descricao", "estado"}
+    OPTIONAL_FIELDS = {
+        "banheiros",
+        "vagas",
+        "area_m2",
+        "quartos",
+        "descricao",
+        "estado",
+    }
 
     # Campos numéricos onde a LLM deve ter validado o seletor para confiar nele.
     # Sem validação LLM, text-match pode confundir vagas com area_m2 (ex: 55.89m² → vagas=55).
@@ -1107,7 +1294,9 @@ class SiteTemplate:
                 if field in self._REQUIRE_LLM_ORIGIN:
                     llm_voted_for_field = self._llm_voted.get(field, set())
                     if best_sel not in llm_voted_for_field:
-                        log.debug(f"  ⚠ Template: seletor de '{field}' sem validação LLM — ignorado: {best_sel!r}")
+                        log.debug(
+                            f"  ⚠ Template: seletor de '{field}' sem validação LLM — ignorado: {best_sel!r}"
+                        )
                         continue
                 self.confirmed[field] = best_sel
 
@@ -1179,7 +1368,9 @@ class SiteTemplate:
         if has_core and len(self.confirmed) >= self.MIN_FIELDS:
             self.is_ready = True
             fields_str = ", ".join(self.confirmed.keys())
-            log.info(f"🎯 Template CONFIRMADO — {len(self.confirmed)} selectors: {fields_str}")
+            log.info(
+                f"🎯 Template CONFIRMADO — {len(self.confirmed)} selectors: {fields_str}"
+            )
         else:
             log.info(
                 f"⚠ Template não confirmado: {len(self.confirmed)} selectors "
@@ -1187,7 +1378,9 @@ class SiteTemplate:
             )
 
     def extract(
-        self, html: str, url: str,
+        self,
+        html: str,
+        url: str,
         fallback_cidade: Optional[str] = None,
         fallback_estado: Optional[str] = None,
     ) -> Optional[ImovelInput]:
@@ -1223,7 +1416,9 @@ class SiteTemplate:
         # Remover seletores de bairro/cidade que consistentemente retornam lixo
         for bad_field in _rejected_selectors:
             del self.confirmed[bad_field]
-            self._selector_resets[bad_field] = self._selector_resets.get(bad_field, 0) + 1
+            self._selector_resets[bad_field] = (
+                self._selector_resets.get(bad_field, 0) + 1
+            )
             resets = self._selector_resets[bad_field]
             if resets >= self._MAX_SELECTOR_RESETS:
                 log.info(
@@ -1231,7 +1426,9 @@ class SiteTemplate:
                     f"CSS instável, confiando apenas na URL"
                 )
             else:
-                log.info(f"  🗑 Template: removido seletor ruim de '{bad_field}' para auto-correção ({resets}/{self._MAX_SELECTOR_RESETS})")
+                log.info(
+                    f"  🗑 Template: removido seletor ruim de '{bad_field}' para auto-correção ({resets}/{self._MAX_SELECTOR_RESETS})"
+                )
 
         if len(data) < 2:
             self.misses += 1
@@ -1269,16 +1466,24 @@ class SiteTemplate:
         if result.descricao is None:
             # Remove ruído antes de procurar
             clean_soup = BeautifulSoup(html, "lxml")
-            for tag in clean_soup.find_all(["script", "style", "nav", "header", "footer", "iframe", "noscript"]):
+            for tag in clean_soup.find_all(
+                ["script", "style", "nav", "header", "footer", "iframe", "noscript"]
+            ):
                 tag.decompose()
             result.descricao = _extract_desc_from_soup(clean_soup)
             if result.descricao:
-                log.debug(f"  📝 descricao via fallback ({len(result.descricao)} chars)")
+                log.debug(
+                    f"  📝 descricao via fallback ({len(result.descricao)} chars)"
+                )
 
         return result
 
     def __repr__(self):
-        status = "READY" if self.is_ready else f"learning {self._sample_count}/{self.LEARN_PAGES}"
+        status = (
+            "READY"
+            if self.is_ready
+            else f"learning {self._sample_count}/{self.LEARN_PAGES}"
+        )
         return (
             f"SiteTemplate({status}, {len(self.confirmed)} sel, "
             f"hits={self.hits}, miss={self.misses}, llm={self.llm_calls})"
@@ -1341,9 +1546,26 @@ SCHEMA_GUIDE = """{
 }"""
 
 VALID_TIPOS = {
-    "casa", "apartamento", "terreno", "comercial", "rural", "cobertura",
-    "kitnet", "sobrado", "flat", "loft", "galpao", "sala", "loja",
-    "chacara", "predio", "box", "barracao", "duplex", "triplex", "condominio",
+    "casa",
+    "apartamento",
+    "terreno",
+    "comercial",
+    "rural",
+    "cobertura",
+    "kitnet",
+    "sobrado",
+    "flat",
+    "loft",
+    "galpao",
+    "sala",
+    "loja",
+    "chacara",
+    "predio",
+    "box",
+    "barracao",
+    "duplex",
+    "triplex",
+    "condominio",
     "pavilhao",
     "outro",
 }
@@ -1356,8 +1578,14 @@ def _extract_desc_from_soup(soup: BeautifulSoup) -> Optional[str]:
     """
     # 1. Procurar após headings semânticos de descrição
     _DESC_HEADINGS = {
-        "sobre o imóvel", "sobre o imovel", "descrição", "descricao",
-        "detalhes", "características", "caracteristicas", "sobre o imóvel",
+        "sobre o imóvel",
+        "sobre o imovel",
+        "descrição",
+        "descricao",
+        "detalhes",
+        "características",
+        "caracteristicas",
+        "sobre o imóvel",
     }
     for heading in soup.find_all(["h1", "h2", "h3", "h4", "h5", "strong"]):
         htxt = heading.get_text(strip=True).lower()
@@ -1404,9 +1632,17 @@ def html_to_clean_text(html: str) -> str:
         page_title = title_tag.get_text(strip=True)
 
     # Remove ruído — NÃO remove <header>: pode conter o preço principal (ex: Antonella)
-    for tag in soup.find_all([
-        "script", "style", "iframe", "noscript", "svg", "nav", "footer",
-    ]):
+    for tag in soup.find_all(
+        [
+            "script",
+            "style",
+            "iframe",
+            "noscript",
+            "svg",
+            "nav",
+            "footer",
+        ]
+    ):
         tag.decompose()
 
     # Remove elementos de cookie/popup/modal
@@ -1454,7 +1690,8 @@ def extract_via_llm(
     candidates = _collect_numeric_candidates(html)
     candidates_str = (
         json.dumps(candidates, ensure_ascii=False)
-        if candidates else "{} (nenhum candidato pré-extraído — extrair do texto)"
+        if candidates
+        else "{} (nenhum candidato pré-extraído — extrair do texto)"
     )
 
     parsed = _llm_chat_parsed(
@@ -1462,8 +1699,7 @@ def extract_via_llm(
             {
                 "role": "system",
                 "content": (
-                    SYSTEM_PROMPT
-                    + "\n\nREGRA CRÍTICA — candidate-then-pick:\n"
+                    SYSTEM_PROMPT + "\n\nREGRA CRÍTICA — candidate-then-pick:\n"
                     "Para campos numéricos (preco, area_m2, quartos, banheiros, vagas) você "
                     "receberá uma lista de CANDIDATOS pré-extraídos da página. "
                     "ESCOLHA o valor correto APENAS entre eles. "
@@ -1510,24 +1746,40 @@ def extract_via_llm(
         quartos=quartos,
         banheiros=banheiros,
         vagas=vagas,
-        descricao=(parsed.descricao or None) if not parsed.descricao or len(parsed.descricao) >= 10 else None,
+        descricao=(
+            (parsed.descricao or None)
+            if not parsed.descricao or len(parsed.descricao) >= 10
+            else None
+        ),
     )
 
     preco_str = f"R${result.preco:,.0f}" if result.preco else "s/preço"
-    log.info(f"✓ [llm-parsed] {result.titulo or url[:40]} — {preco_str} — {result.bairro or '?'}")
+    log.info(
+        f"✓ [llm-parsed] {result.titulo or url[:40]} — {preco_str} — {result.bairro or '?'}"
+    )
     return result
 
 
 # ─── Merge helper ─────────────────────────────────────────────────────────────
+
 
 def _merge_results(base: ImovelInput, extra: Optional[ImovelInput]) -> ImovelInput:
     """Preenche campos vazios de `base` com valores de `extra`."""
     if not extra:
         return base
     for field in [
-        "titulo", "tipo", "transacao", "descricao",
-        "cidade", "bairro", "estado",
-        "preco", "area_m2", "quartos", "banheiros", "vagas",
+        "titulo",
+        "tipo",
+        "transacao",
+        "descricao",
+        "cidade",
+        "bairro",
+        "estado",
+        "preco",
+        "area_m2",
+        "quartos",
+        "banheiros",
+        "vagas",
     ]:
         if getattr(base, field) is None and getattr(extra, field) is not None:
             setattr(base, field, getattr(extra, field))
@@ -1539,8 +1791,16 @@ def _merge_results(base: ImovelInput, extra: Optional[ImovelInput]) -> ImovelInp
 # Queremos preencher o máximo possível para cada imóvel.
 
 _ALL_DATA_FIELDS = (
-    "preco", "tipo", "transacao", "quartos", "banheiros",
-    "vagas", "area_m2", "cidade", "bairro", "descricao",
+    "preco",
+    "tipo",
+    "transacao",
+    "quartos",
+    "banheiros",
+    "vagas",
+    "area_m2",
+    "cidade",
+    "bairro",
+    "descricao",
 )
 
 
@@ -1553,10 +1813,20 @@ def _missing_fields(result: Optional[ImovelInput]) -> list[str]:
 
 # ─── Detecção de valores suspeitos (gatilho para vision opcional) ────────────
 
-_RESIDENCIAL_TIPOS = frozenset({
-    "apartamento", "casa", "kitnet", "studio", "cobertura", "sobrado",
-    "duplex", "triplex", "flat", "loft",
-})
+_RESIDENCIAL_TIPOS = frozenset(
+    {
+        "apartamento",
+        "casa",
+        "kitnet",
+        "studio",
+        "cobertura",
+        "sobrado",
+        "duplex",
+        "triplex",
+        "flat",
+        "loft",
+    }
+)
 
 
 def _looks_suspect(result: Optional[ImovelInput]) -> tuple[bool, str, list[str]]:
@@ -1604,7 +1874,8 @@ def _looks_suspect(result: Optional[ImovelInput]) -> tuple[bool, str, list[str]]
     # mas se sobreviveu — provavelmente é lixo)
     if result.bairro and (
         " | " in result.bairro
-        or result.bairro.lower() in {"imovel", "imóvel", "anúncio", "anuncio", "detalhe"}
+        or result.bairro.lower()
+        in {"imovel", "imóvel", "anúncio", "anuncio", "detalhe"}
     ):
         reasons.append(f"bairro={result.bairro!r} parece lixo")
         fields_to_reset.append("bairro")
@@ -1616,27 +1887,40 @@ def _looks_suspect(result: Optional[ImovelInput]) -> tuple[bool, str, list[str]]
 # Quando o template extrai um imóvel desse tipo mas campo está nulo → LLM corrige
 _FIELDS_EXPECTED_BY_TIPO: dict[str, set] = {
     "apartamento": {"preco", "bairro", "cidade", "quartos", "banheiros", "area_m2"},
-    "casa":        {"preco", "bairro", "cidade", "quartos", "banheiros", "area_m2"},
-    "sobrado":     {"preco", "bairro", "cidade", "quartos", "banheiros"},
-    "studio":      {"preco", "bairro", "cidade", "quartos", "banheiros"},
-    "flat":        {"preco", "bairro", "cidade", "quartos", "banheiros"},
-    "cobertura":   {"preco", "bairro", "cidade", "quartos", "banheiros"},
-    "kitnet":      {"preco", "bairro", "cidade", "banheiros"},
-    "terreno":     {"preco", "bairro", "cidade", "area_m2"},
-    "lote":        {"preco", "bairro", "cidade", "area_m2"},
+    "casa": {"preco", "bairro", "cidade", "quartos", "banheiros", "area_m2"},
+    "sobrado": {"preco", "bairro", "cidade", "quartos", "banheiros"},
+    "studio": {"preco", "bairro", "cidade", "quartos", "banheiros"},
+    "flat": {"preco", "bairro", "cidade", "quartos", "banheiros"},
+    "cobertura": {"preco", "bairro", "cidade", "quartos", "banheiros"},
+    "kitnet": {"preco", "bairro", "cidade", "banheiros"},
+    "terreno": {"preco", "bairro", "cidade", "area_m2"},
+    "lote": {"preco", "bairro", "cidade", "area_m2"},
     "sala comercial": {"preco", "bairro", "cidade", "area_m2"},
-    "sala":        {"preco", "bairro", "cidade", "area_m2"},
-    "galpão":      {"preco", "bairro", "cidade", "area_m2"},
-    "prédio":      {"preco", "bairro", "cidade", "area_m2"},
+    "sala": {"preco", "bairro", "cidade", "area_m2"},
+    "galpão": {"preco", "bairro", "cidade", "area_m2"},
+    "prédio": {"preco", "bairro", "cidade", "area_m2"},
 }
 
 
 # Segmentos de URL genéricos que indicam transação/seção, não localização.
-_URL_SECTION_SLUGS = frozenset({
-    "imovel", "imoveis", "imovel-detalhe", "property", "properties",
-    "venda", "aluguel", "locacao", "comprar", "alugar", "lancamento", "lancamentos",
-    "temporada", "permuta",
-})
+_URL_SECTION_SLUGS = frozenset(
+    {
+        "imovel",
+        "imoveis",
+        "imovel-detalhe",
+        "property",
+        "properties",
+        "venda",
+        "aluguel",
+        "locacao",
+        "comprar",
+        "alugar",
+        "lancamento",
+        "lancamentos",
+        "temporada",
+        "permuta",
+    }
+)
 
 
 def _extract_location_from_url(url: str) -> tuple[Optional[str], Optional[str]]:
@@ -1652,6 +1936,7 @@ def _extract_location_from_url(url: str) -> tuple[Optional[str], Optional[str]]:
       /imoveis/venda/farroupilha/sao-luiz/-/casa/3419/imovel/3371768
       /imoveis/aluguel/porto-alegre/centro/-/apartamento/123/imovel/456
     """
+
     def slug_to_name(slug: str) -> str:
         return slug.replace("--", " ").replace("-", " ").title()
 
@@ -1662,8 +1947,42 @@ def _extract_location_from_url(url: str) -> tuple[Optional[str], Optional[str]]:
 
     try:
         from urllib.parse import urlparse
+
         path = urlparse(url).path.strip("/")
         parts = path.split("/")
+
+        # Siglas de estados brasileiros para detecção na URL
+        _BR_STATES = frozenset(
+            {
+                "ac",
+                "al",
+                "ap",
+                "am",
+                "ba",
+                "ce",
+                "df",
+                "es",
+                "go",
+                "ma",
+                "mt",
+                "ms",
+                "mg",
+                "pa",
+                "pb",
+                "pr",
+                "pe",
+                "pi",
+                "rj",
+                "rn",
+                "rs",
+                "ro",
+                "rr",
+                "sc",
+                "sp",
+                "se",
+                "to",
+            }
+        )
 
         # Filtrar segmentos que NÃO são localização:
         # - seções (imoveis, venda, etc.)
@@ -1683,6 +2002,22 @@ def _extract_location_from_url(url: str) -> tuple[Optional[str], Optional[str]]:
             if _is_tipo_slug(p):
                 continue
             location_slugs.append(part)
+
+        # Detectar se o último slug geográfico é um estado (ex: "RS", "SP").
+        # Quando presente, o padrão é {bairro}/{cidade}/{estado} — ordem INVERTIDA
+        # em relação ao padrão comum {cidade}/{bairro}.
+        # Exemplos:
+        #   destak: /imovel/Apartamento/Pio-X/Caxias-do-Sul/RS/3455
+        #     → location_slugs = ["Pio-X", "Caxias-do-Sul", "RS"]
+        #     → bairro="Pio X", cidade="Caxias Do Sul"
+        if location_slugs and location_slugs[-1].lower() in _BR_STATES:
+            geo_no_state = location_slugs[:-1]
+            if len(geo_no_state) >= 2:
+                # Penúltimo = bairro, último (antes do estado) = cidade
+                return slug_to_name(geo_no_state[-2]), slug_to_name(geo_no_state[-1])
+            if len(geo_no_state) == 1:
+                return None, slug_to_name(geo_no_state[0])
+            return None, None
 
         # Padrão mais comum BR: primeiro slug geográfico = cidade, segundo = bairro
         if len(location_slugs) >= 2:
@@ -1725,7 +2060,15 @@ def _llm_heal_missing_fields(
     if tipo:
         expected = _FIELDS_EXPECTED_BY_TIPO.get(tipo.lower(), set())
     else:
-        expected = {"quartos", "banheiros", "vagas", "area_m2", "preco", "bairro", "cidade"}
+        expected = {
+            "quartos",
+            "banheiros",
+            "vagas",
+            "area_m2",
+            "preco",
+            "bairro",
+            "cidade",
+        }
 
     if not expected:
         return None
@@ -1753,7 +2096,9 @@ def _llm_heal_missing_fields(
     clean_text = html_to_clean_text(html)
     descricao_hint = ""
     if result.descricao and len(result.descricao) > 10:
-        descricao_hint = f"\nDESCRIÇÃO JÁ EXTRAÍDA (leia com atenção): {result.descricao}"
+        descricao_hint = (
+            f"\nDESCRIÇÃO JÁ EXTRAÍDA (leia com atenção): {result.descricao}"
+        )
     if len(clean_text) < 50 and not descricao_hint:
         return None
 
@@ -1833,7 +2178,9 @@ def _llm_heal_missing_fields(
     filled = [f for f in truly_missing if getattr(healed, f, None) is not None]
     if filled:
         vision_tag = " +vision" if screenshot_b64 else ""
-        log.info(f"  🔧 [heal{vision_tag}] {tipo} | preencheu: {', '.join(filled)} — {url[-50:]}")
+        log.info(
+            f"  🔧 [heal{vision_tag}] {tipo} | preencheu: {', '.join(filled)} — {url[-50:]}"
+        )
         return healed
 
     return None
@@ -1841,12 +2188,13 @@ def _llm_heal_missing_fields(
 
 # ─── Pipeline completa de extração ───────────────────────────────────────────
 
+
 def extract_property_data(
     html: str,
     url: str,
     fallback_cidade: Optional[str] = None,
     fallback_estado: Optional[str] = None,
-    template: Optional['SiteTemplate'] = None,
+    template: Optional["SiteTemplate"] = None,
     *,
     screenshot_b64: Optional[str] = None,
 ) -> Optional[ImovelInput]:
@@ -1895,7 +2243,9 @@ def extract_property_data(
             if regex_extra:
                 # Cross-validação de preço: se divergem muito, logar aviso
                 if tpl_result.preco and regex_extra.preco:
-                    diff_pct = abs(tpl_result.preco - regex_extra.preco) / max(tpl_result.preco, regex_extra.preco)
+                    diff_pct = abs(tpl_result.preco - regex_extra.preco) / max(
+                        tpl_result.preco, regex_extra.preco
+                    )
                     if diff_pct > 0.15:
                         log.debug(
                             f"  ⚠ Preço diverge: template=R${tpl_result.preco:,.0f} "
@@ -1907,15 +2257,21 @@ def extract_property_data(
             url_bairro, url_cidade = _extract_location_from_url(url)
             if url_bairro:
                 if tpl_result.bairro != url_bairro:
-                    log.debug(f"  📍 bairro URL override: '{tpl_result.bairro}' → '{url_bairro}'")
+                    log.debug(
+                        f"  📍 bairro URL override: '{tpl_result.bairro}' → '{url_bairro}'"
+                    )
                 tpl_result.bairro = url_bairro
             if url_cidade:
                 if tpl_result.cidade != url_cidade:
-                    log.debug(f"  📍 cidade URL override: '{tpl_result.cidade}' → '{url_cidade}'")
+                    log.debug(
+                        f"  📍 cidade URL override: '{tpl_result.cidade}' → '{url_cidade}'"
+                    )
                 tpl_result.cidade = url_cidade
 
             # Se bairro/cidade ainda nulos, micro-LLM via título
-            if (tpl_result.bairro is None or tpl_result.cidade is None) and tpl_result.titulo:
+            if (
+                tpl_result.bairro is None or tpl_result.cidade is None
+            ) and tpl_result.titulo:
                 loc = _llm_locate_from_titulo(tpl_result.titulo, url)
                 if loc:
                     tpl_result = _merge_results(tpl_result, loc)
@@ -1929,24 +2285,36 @@ def extract_property_data(
                 if tpl_result.quartos is None:
                     tpl_result.quartos = _extract_quartos(desc_text)
                 # Banheiros: preferir descrição quando ela tem valor explícito
-                m_banh = re.search(r'(\d+)\s*(?:banheiros?\s*sociais?|banheiros?|bwc\b|wc\b)', desc_text)
+                m_banh = re.search(
+                    r"(\d+)\s*(?:banheiros?\s*sociais?|banheiros?|bwc\b|wc\b)",
+                    desc_text,
+                )
                 if m_banh:
                     banh_desc = int(m_banh.group(1))
                     if 1 <= banh_desc <= 15:
                         if tpl_result.banheiros != banh_desc:
-                            log.debug(f"  🔧 banheiros desc={banh_desc} vs CSS={tpl_result.banheiros} → usando desc")
+                            log.debug(
+                                f"  🔧 banheiros desc={banh_desc} vs CSS={tpl_result.banheiros} → usando desc"
+                            )
                         tpl_result.banheiros = banh_desc
                 elif tpl_result.banheiros is None:
                     pass  # sem match e sem CSS: fica None
                 # Vagas: preferir descrição quando ela tem valor explícito
-                m_vagas = re.search(r'(?:garagem\s+p/\s*(\d+)\s*carros?|garagem.*?(\d+)\s*carros?|(\d+)\s*vagas?\s*de\s*(?:garagem|estacionamento)|(\d+)\s*vagas?\s*(?:de\s*)?(?:garagem|estacionamento)?)', desc_text)
+                m_vagas = re.search(
+                    r"(?:garagem\s+p/\s*(\d+)\s*carros?|garagem.*?(\d+)\s*carros?|(\d+)\s*vagas?\s*de\s*(?:garagem|estacionamento)|(\d+)\s*vagas?\s*(?:de\s*)?(?:garagem|estacionamento)?)",
+                    desc_text,
+                )
                 if m_vagas:
                     v = int(next(g for g in m_vagas.groups() if g is not None))
                     if 1 <= v <= 10:
                         if tpl_result.vagas != v:
-                            log.debug(f"  🔧 vagas desc={v} vs CSS={tpl_result.vagas} → usando desc")
+                            log.debug(
+                                f"  🔧 vagas desc={v} vs CSS={tpl_result.vagas} → usando desc"
+                            )
                         tpl_result.vagas = v
-                elif tpl_result.vagas is None and re.search(r'garagem|estacionamento', desc_text):
+                elif tpl_result.vagas is None and re.search(
+                    r"garagem|estacionamento", desc_text
+                ):
                     # Garagem mencionada sem número → 1 vaga
                     tpl_result.vagas = 1
 
@@ -1960,7 +2328,9 @@ def extract_property_data(
                     log.debug(f"  🔍 tipo da URL: {url_tipo}")
                 elif tpl_result.tipo != url_tipo:
                     # URL tem prioridade: mais confiável que CSS selector do template
-                    log.debug(f"  🔍 tipo URL override: '{tpl_result.tipo}' → '{url_tipo}'")
+                    log.debug(
+                        f"  🔍 tipo URL override: '{tpl_result.tipo}' → '{url_tipo}'"
+                    )
                     tpl_result.tipo = url_tipo
 
             tpl_result.imagens = imagens if imagens else tpl_result.imagens
@@ -1972,8 +2342,12 @@ def extract_property_data(
                 _url_heal_soup = BeautifulSoup(html, "lxml")
                 _url_updated = []
                 for loc_f, loc_v in [("bairro", url_bairro), ("cidade", url_cidade)]:
-                    if loc_v and loc_f not in template.confirmed \
-                            and template._selector_resets.get(loc_f, 0) < template._MAX_SELECTOR_RESETS:
+                    if (
+                        loc_v
+                        and loc_f not in template.confirmed
+                        and template._selector_resets.get(loc_f, 0)
+                        < template._MAX_SELECTOR_RESETS
+                    ):
                         sels = _find_selectors_for_value(_url_heal_soup, loc_v, loc_f)
                         if sels:
                             template.confirmed[loc_f] = sels[0]
@@ -1985,17 +2359,29 @@ def extract_property_data(
                     )
 
             # ── Self-healing: campos ainda nulos → LLM preenche + atualiza template
-            healed = _llm_heal_missing_fields(html, url, tpl_result, screenshot_b64=screenshot_b64)
+            healed = _llm_heal_missing_fields(
+                html, url, tpl_result, screenshot_b64=screenshot_b64
+            )
             if healed:
                 tpl_result = _merge_results(tpl_result, healed)
                 # Tenta achar selectors CSS para os novos valores e atualiza template
                 soup_heal = BeautifulSoup(html, "lxml")
                 healed_fields = [
-                    f for f in ("quartos", "banheiros", "vagas", "area_m2",
-                                "preco", "bairro", "cidade")
+                    f
+                    for f in (
+                        "quartos",
+                        "banheiros",
+                        "vagas",
+                        "area_m2",
+                        "preco",
+                        "bairro",
+                        "cidade",
+                    )
                     if getattr(healed, f, None) is not None
-                    and f not in template.confirmed  # só adiciona se não tinha (ou foi removido)
-                    and template._selector_resets.get(f, 0) < template._MAX_SELECTOR_RESETS
+                    and f
+                    not in template.confirmed  # só adiciona se não tinha (ou foi removido)
+                    and template._selector_resets.get(f, 0)
+                    < template._MAX_SELECTOR_RESETS
                 ]
                 updated = []
                 for field in healed_fields:
@@ -2009,6 +2395,21 @@ def extract_property_data(
                         f"  ✅ Template auto-corrigido: +{', '.join(updated)} "
                         f"({len(template.confirmed)} selectors total)"
                     )
+
+            # Fallback de título: gerar da URL quando template e heal não encontraram
+            if not tpl_result.titulo and tpl_result.tipo:
+                _b = tpl_result.bairro
+                _c = tpl_result.cidade
+                _tp = [tpl_result.tipo.title()]
+                if _b and _c:
+                    _tp.append(f" em {_b}, {_c}")
+                elif _b:
+                    _tp.append(f" em {_b}")
+                elif _c:
+                    _tp.append(f" em {_c}")
+                if len(_tp) > 1:
+                    tpl_result.titulo = "".join(_tp)
+                    log.debug(f"  📝 Título gerado: {tpl_result.titulo}")
 
             preco_str = f"R${tpl_result.preco:,.0f}" if tpl_result.preco else "s/preço"
             log.info(
@@ -2045,7 +2446,9 @@ def extract_property_data(
     # ── 3. LLM — chamada se campos core faltam ──
     missing = _missing_fields(result)
     # Campos core: sem eles o dado é pouco útil
-    core_missing = [f for f in missing if f in ("preco", "tipo", "cidade", "bairro", "transacao")]
+    core_missing = [
+        f for f in missing if f in ("preco", "tipo", "cidade", "bairro", "transacao")
+    ]
     # Durante aprendizado do template: sempre chamar LLM para coleta de dados
     should_call_llm = bool(core_missing) or (template is not None and template.learning)
 
@@ -2078,6 +2481,23 @@ def extract_property_data(
     # Fallbacks de localização
     result.cidade = result.cidade or fallback_cidade
     result.estado = result.estado or fallback_estado
+
+    # Fallback de título: gerar da URL quando todos os métodos falharam
+    if not result.titulo and result.tipo:
+        url_bairro, url_cidade = _extract_location_from_url(url)
+        _b = result.bairro or url_bairro
+        _c = result.cidade or url_cidade
+        _tp = [result.tipo.title()]
+        if _b and _c:
+            _tp.append(f" em {_b}, {_c}")
+        elif _b:
+            _tp.append(f" em {_b}")
+        elif _c:
+            _tp.append(f" em {_c}")
+        if len(_tp) > 1:
+            result.titulo = "".join(_tp)
+            log.debug(f"  📝 Título gerado da URL: {result.titulo}")
+
     result.imagens = imagens if imagens else result.imagens
 
     method_str = "".join(method_parts) or "?"
