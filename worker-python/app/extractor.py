@@ -14,6 +14,7 @@ import os
 import re
 import json
 from typing import Optional, Literal
+from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 from openai import OpenAI
@@ -321,7 +322,7 @@ def _collect_numeric_candidates(html: str) -> dict[str, list]:
 # ─── 1. Extração de imagens via BeautifulSoup ────────────────────────────────
 
 
-def extract_images(html: str) -> list[str]:
+def extract_images(html: str, base_url: Optional[str] = None) -> list[str]:
     """
     Extrai URLs de imagens do HTML, com ranking:
     1. og:image / twitter:image / link[rel=image_src] — SEO padrão = foto principal
@@ -338,10 +339,22 @@ def extract_images(html: str) -> list[str]:
         if not u:
             return
         u = u.strip()
+        # Resolve URLs relativas usando base_url (ex: Destak usa /marca/viasw/fotos/...)
+        if base_url and not u.startswith(("http://", "https://")):
+            if u.startswith("//"):
+                scheme = "https://" if base_url.startswith("https://") else "http://"
+                u = scheme + u[2:]
+            elif u.startswith("/"):
+                parsed_base = urlparse(base_url)
+                u = f"{parsed_base.scheme}://{parsed_base.netloc}{u}"
+            else:
+                return  # paths relativos como ../img.jpg — ignorar
         if not u.startswith("http") or u in seen:
             return
         if re.search(
-            r"logo|icon|banner|avatar|sprite|footer|placeholder|blank\.", u, re.I
+            r"logo|icon|banner|avatar|sprite|footer|placeholder|blank\.|imagem-padrao|imagem_padrao",
+            u,
+            re.I,
         ):
             return
         seen.add(u)
@@ -1460,7 +1473,7 @@ class SiteTemplate:
             descricao=data.get("descricao"),
         )
 
-        result.imagens = extract_images(html)
+        result.imagens = extract_images(html, base_url=url)
 
         # Fallback descrição: se CSS não achou selector, extrai do maior bloco de texto
         if result.descricao is None:
@@ -2216,7 +2229,7 @@ def extract_property_data(
     """
     # Imagens via BS4 (sempre, independente do método)
     with timed_step("extract_images_ms"):
-        imagens = extract_images(html)
+        imagens = extract_images(html, base_url=url)
 
     # 404 soft — usar word-boundary para evitar falso positivo em CDN paths (ex: /10404/property/)
     if re.search(r"(?<!\d)404(?!\d)|não encontrad|not found", html[:2000], re.I):
@@ -2396,6 +2409,13 @@ def extract_property_data(
                         f"({len(template.confirmed)} selectors total)"
                     )
 
+            # Fallback de localização via URL (grátis, preciso para qualquer site BR)
+            _url_b, _url_c = _extract_location_from_url(url)
+            if _url_b and not tpl_result.bairro:
+                tpl_result.bairro = _url_b
+            if _url_c and not tpl_result.cidade:
+                tpl_result.cidade = _url_c
+
             # Fallback de título: gerar da URL quando template e heal não encontraram
             if not tpl_result.titulo and tpl_result.tipo:
                 _b = tpl_result.bairro
@@ -2482,11 +2502,17 @@ def extract_property_data(
     result.cidade = result.cidade or fallback_cidade
     result.estado = result.estado or fallback_estado
 
+    # Fallback de localização via URL (grátis, preciso para qualquer site BR com estado na URL)
+    url_bairro, url_cidade = _extract_location_from_url(url)
+    if url_bairro and not result.bairro:
+        result.bairro = url_bairro
+    if url_cidade and not result.cidade:
+        result.cidade = url_cidade
+
     # Fallback de título: gerar da URL quando todos os métodos falharam
     if not result.titulo and result.tipo:
-        url_bairro, url_cidade = _extract_location_from_url(url)
-        _b = result.bairro or url_bairro
-        _c = result.cidade or url_cidade
+        _b = result.bairro
+        _c = result.cidade
         _tp = [result.tipo.title()]
         if _b and _c:
             _tp.append(f" em {_b}, {_c}")
